@@ -1,0 +1,19 @@
+{
+    "isLocked": true,
+    "solenoidPulseMs": 800,
+    "batteryV": 8.85,
+    "sleepTimeout": 180,
+    "passcode": "123456",
+    "logs": [
+        {
+            "time": "14:50:38",
+            "text": "Servidor Laragon (Simulador ESP32-C3) iniciado",
+            "error": false
+        },
+        {
+            "time": "14:51:04",
+            "text": "Comando de destravamento recebido via Web",
+            "error": false
+        }
+    ]
+}

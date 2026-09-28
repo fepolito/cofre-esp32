@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Cofre Inteligente ESP32</title>
+  <style>
+    :root {
+      --bg-primary: #0f172a;
+      --bg-card: #1e293b;
+      --bg-card-hover: #334155;
+      --accent-primary: #38bdf8;
+      --accent-success: #10b981;
+      --accent-danger: #ef4444;
+      --accent-warning: #f59e0b;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --border-color: #334155;
+      --radius-lg: 16px;
+      --radius-md: 10px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* Header */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      background: var(--bg-card);
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border-color);
+    }
+
+    .logo-area {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, #0284c7, #38bdf8);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+    }
+
+    .logo-text h1 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .logo-text span {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent-success);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .status-badge.locked {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--accent-danger);
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: currentColor;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--bg-card);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      border: 1px solid var(--border-color);
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+    }
+
+    /* Hero / Action Section */
+    .hero-card {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      padding: 24px 18px;
+    }
+
+    .lock-indicator {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: rgba(56, 189, 248, 0.1);
+      border: 2px solid var(--accent-primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 38px;
+      transition: all 0.3s ease;
+    }
+
+    .lock-indicator.unlocked {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: var(--accent-success);
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+      100% { transform: scale(1); }
+    }
+
+    .btn-unlock {
+      width: 100%;
+      padding: 16px;
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: white;
+      background: linear-gradient(135deg, #0284c7, #2563eb);
+      border: none;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      box-shadow: 0 10px 15px -3px rgba(2, 132, 199, 0.4);
+      transition: all 0.2s ease;
+    }
+
+    .btn-unlock:active {
+      transform: scale(0.98);
+      filter: brightness(1.1);
+    }
+
+    .btn-unlock:disabled {
+      background: #475569;
+      box-shadow: none;
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+
+    /* Metrics Grid */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .metric-card {
+      background: rgba(15, 23, 42, 0.6);
+      border-radius: var(--radius-md);
+      padding: 12px;
+      border: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .metric-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    .metric-value {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text-main);
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+    }
+
+    .metric-sub {
+      font-size: 0.75rem;
+      color: var(--accent-success);
+    }
+
+    /* Tabs */
+    .tabs-header {
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 8px;
+      margin-bottom: 14px;
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .tab-btn.active {
+      background: var(--bg-card-hover);
+      color: var(--accent-primary);
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    /* Forms */
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .form-group label {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .form-input {
+      background: #0f172a;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 12px;
+      color: white;
+      font-size: 1rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .form-input:focus {
+      border-color: var(--accent-primary);
+    }
+
+    .btn-secondary {
+      width: 100%;
+      padding: 12px;
+      background: var(--bg-card-hover);
+      border: 1px solid var(--border-color);
+      color: white;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .btn-secondary:hover {
+      background: #475569;
+    }
+
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.2);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      color: #fca5a5;
+    }
+
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.3);
+    }
+
+    /* Logs list */
+    .log-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .log-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 10px;
+      background: #0f172a;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      border-left: 3px solid var(--accent-primary);
+    }
+
+    .log-item.error {
+      border-left-color: var(--accent-danger);
+    }
+
+    .log-time {
+      color: var(--text-muted);
+      font-size: 0.7rem;
+    }
+
+    /* Alerts */
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #334155;
+      color: white;
+      padding: 12px 20px;
+      border-radius: 30px;
+      font-size: 0.9rem;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      z-index: 100;
+      display: none;
+      border: 1px solid #475569;
+    }
+
+    footer {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      margin-top: 10px;
+      padding: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div class="logo-area">
+        <div class="logo-icon">🔒</div>
+        <div class="logo-text">
+          <h1>Cofre ESP32</h1>
+          <span id="firmwareVer">Firmware v1.0 • ESP32-C3</span>
+        </div>
+      </div>
+      <div class="status-badge locked" id="lockBadge">
+        <span class="status-dot"></span>
+        <span id="lockBadgeText">TRANCADO</span>
+      </div>
+    </header>
+
+    <!-- Main Card: Destravamento -->
+    <div class="card hero-card">
+      <div class="lock-indicator" id="lockIcon">🔒</div>
+      <div>
+        <h2 id="heroTitle" style="font-size: 1.3rem; margin-bottom: 4px;">Cofre Trancado</h2>
+        <p style="color: var(--text-muted); font-size: 0.85rem;" id="heroSubtitle">Clique abaixo para ativar o pulso da bobina</p>
+      </div>
+
+      <button class="btn-unlock" id="btnUnlock" onclick="handleUnlock()">
+        <span>⚡ DESTRAVAR AGORA</span>
+      </button>
+
+      <!-- Grid de Métricas de Hardware -->
+      <div class="metrics-grid" style="width: 100%;">
+        <div class="metric-card">
+          <span class="metric-label">Bateria (9V)</span>
+          <div class="metric-value" id="batVoltage">8.8 <span style="font-size: 0.8rem; color: var(--text-muted);">V</span></div>
+          <span class="metric-sub" id="batPercent">~95% (Boa)</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Pulso Solenoide</span>
+          <div class="metric-value" id="pulseDisplay">800 <span style="font-size: 0.8rem; color: var(--text-muted);">ms</span></div>
+          <span class="metric-sub" style="color: var(--text-muted);">Temporizado</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Abas de Configuração e Histórico -->
+    <div class="card">
+      <div class="tabs-header">
+        <button class="tab-btn active" onclick="switchTab('senhas')">🔑 Senhas</button>
+        <button class="tab-btn" onclick="switchTab('ajustes')">⚙️ Ajustes</button>
+        <button class="tab-btn" onclick="switchTab('historico')">📋 Logs</button>
+      </div>
+
+      <!-- Tab: Senhas -->
+      <div class="tab-content active" id="tab-senhas">
+        <form onsubmit="event.preventDefault(); handleChangePassword();">
+          <div class="form-group">
+            <label for="currentPin">Senha Atual (Mestre)</label>
+            <input type="password" id="currentPin" class="form-input" placeholder="Digite a senha atual" maxlength="8" required>
+          </div>
+          <div class="form-group">
+            <label for="newPin">Nova Senha Teclado (4 a 8 dígitos)</label>
+            <input type="password" id="newPin" class="form-input" placeholder="Ex: 123456" maxlength="8" pattern="[0-9]*" inputmode="numeric" required>
+          </div>
+          <div class="form-group">
+            <label for="confirmPin">Confirmar Nova Senha</label>
+            <input type="password" id="confirmPin" class="form-input" placeholder="Repita a nova senha" maxlength="8" pattern="[0-9]*" inputmode="numeric" required>
+          </div>
+          <button type="submit" class="btn-secondary" style="background: #0284c7; border: none; margin-top: 4px;">Atualizar Senha</button>
+        </form>
+      </div>
+
+      <!-- Tab: Ajustes -->
+      <div class="tab-content" id="tab-ajustes">
+        <div class="form-group">
+          <label for="pulseTimeInput">Tempo de Retração da Bobina (ms)</label>
+          <input type="number" id="pulseTimeInput" class="form-input" value="800" min="300" max="2000" step="100">
+        </div>
+        <div class="form-group">
+          <label for="sleepTimeoutInput">Timeout Captive Portal (segundos)</label>
+          <input type="number" id="sleepTimeoutInput" class="form-input" value="180" min="30" max="600">
+        </div>
+        <button class="btn-secondary" onclick="handleSaveConfig()" style="margin-bottom: 12px;">Salvar Parâmetros</button>
+
+        <hr style="border: none; border-top: 1px solid var(--border-color); margin: 16px 0;">
+
+        <button class="btn-secondary btn-danger" onclick="handleSleepNow()">💤 Desligar Wi-Fi e Entrar em Deep Sleep</button>
+      </div>
+
+      <!-- Tab: Logs -->
+      <div class="tab-content" id="tab-historico">
+        <div class="log-list" id="logContainer">
+          <!-- Logs inseridos dinamicamente -->
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      Sistema Retrofit ESP32-C3 • Desenvolvido por Fernando Polito
+    </footer>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // Configurações do Estado Local
+    const state = {
+      isLocked: true,
+      solenoidPulseMs: 800,
+      batteryV: 8.8,
+      sleepTimeout: 180,
+      logs: [
+        { time: 'Agora', text: 'Captive Portal inicializado sob demanda', error: false },
+        { time: 'Hoje 11:20', text: 'Abertura por Teclado físico', error: false },
+        { time: 'Ontem 18:40', text: 'Tentativa de senha incorreta', error: true }
+      ]
+    };
+
+    function showToast(msg, isError = false) {
+      const toast = document.getElementById('toast');
+      toast.innerText = msg;
+      toast.style.borderColor = isError ? 'var(--accent-danger)' : 'var(--accent-success)';
+      toast.style.display = 'block';
+      setTimeout(() => { toast.style.display = 'none'; }, 3000);
+    }
+
+    function switchTab(tabName) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+      event.target.classList.add('active');
+      document.getElementById('tab-' + tabName).classList.add('active');
+    }
+
+    function renderLogs() {
+      const c = document.getElementById('logContainer');
+      c.innerHTML = state.logs.map(l => `
+        <div class="log-item ${l.error ? 'error' : ''}">
+          <span>${l.text}</span>
+          <span class="log-time">${l.time}</span>
+        </div>
+      `).join('');
+    }
+
+    async function handleUnlock() {
+      const btn = document.getElementById('btnUnlock');
+      const icon = document.getElementById('lockIcon');
+      const badge = document.getElementById('lockBadge');
+      const badgeText = document.getElementById('lockBadgeText');
+      const title = document.getElementById('heroTitle');
+      const sub = document.getElementById('heroSubtitle');
+
+      btn.disabled = true;
+      btn.innerHTML = '<span>⏳ DESTRAVANDO...</span>';
+
+      try {
+        // Envia requisição para a API (seja PHP no Laragon ou WebServer no ESP32)
+        const response = await fetch('api.php?action=unlock', { credentials: 'omit' }).catch(() => null);
+        
+        // Atualiza UI para estado destravado
+        icon.innerText = '🔓';
+        icon.classList.add('unlocked');
+        badge.classList.remove('locked');
+        badgeText.innerText = 'DESTRAVADO';
+        title.innerText = 'Cofre Destravado!';
+        sub.innerText = 'Gire a maçaneta mecânica agora!';
+        showToast('Bobina ativada com sucesso!');
+
+        state.logs.unshift({ time: 'Agora', text: 'Abertura remota via Web Captive Portal', error: false });
+        renderLogs();
+
+        // Aguarda a duração do pulso da bobina
+        setTimeout(() => {
+          icon.innerText = '🔒';
+          icon.classList.remove('unlocked');
+          badge.classList.add('locked');
+          badgeText.innerText = 'TRANCADO';
+          title.innerText = 'Cofre Trancado';
+          sub.innerText = 'Clique abaixo para ativar o pulso da bobina';
+          btn.disabled = false;
+          btn.innerHTML = '<span>⚡ DESTRAVAR AGORA</span>';
+        }, state.solenoidPulseMs + 1500);
+
+      } catch (err) {
+        showToast('Falha na comunicação com o cofre', true);
+        btn.disabled = false;
+        btn.innerHTML = '<span>⚡ DESTRAVAR AGORA</span>';
+      }
+    }
+
+    async function handleChangePassword() {
+      const curr = document.getElementById('currentPin').value;
+      const n1 = document.getElementById('newPin').value;
+      const n2 = document.getElementById('confirmPin').value;
+
+      if (n1 !== n2) {
+        showToast('A confirmação da nova senha não confere!', true);
+        return;
+      }
+
+      if (n1.length < 4 || n1.length > 8) {
+        showToast('A senha deve ter entre 4 e 8 dígitos!', true);
+        return;
+      }
+
+      try {
+        await fetch(`api.php?action=password&curr=${encodeURIComponent(curr)}&new=${encodeURIComponent(n1)}`).catch(() => null);
+        showToast('Senha atualizada com sucesso!');
+        state.logs.unshift({ time: 'Agora', text: 'Senha mestre alterada via Web', error: false });
+        renderLogs();
+        document.getElementById('currentPin').value = '';
+        document.getElementById('newPin').value = '';
+        document.getElementById('confirmPin').value = '';
+      } catch (e) {
+        showToast('Erro ao atualizar senha', true);
+      }
+    }
+
+    function handleSaveConfig() {
+      const p = parseInt(document.getElementById('pulseTimeInput').value);
+      const s = parseInt(document.getElementById('sleepTimeoutInput').value);
+
+      if (isNaN(p) || p < 200 || p > 3000) {
+        showToast('Tempo de pulso inválido (200ms - 3000ms)', true);
+        return;
+      }
+
+      state.solenoidPulseMs = p;
+      state.sleepTimeout = s;
+      document.getElementById('pulseDisplay').innerHTML = `${p} <span style="font-size: 0.8rem; color: var(--text-muted);">ms</span>`;
+
+      fetch(`api.php?action=config&pulse=${p}&timeout=${s}`).catch(() => null);
+      showToast('Parâmetros salvos!');
+    }
+
+    function handleSleepNow() {
+      if (confirm('Deseja realmente desligar o Wi-Fi e colocar o cofre em modo de economia de energia agora?')) {
+        showToast('Colocando ESP32 em Deep Sleep...');
+        fetch('api.php?action=sleep').catch(() => null);
+        setTimeout(() => {
+          document.body.innerHTML = `
+            <div style="text-align: center; margin-top: 80px; color: #94a3b8; padding: 20px;">
+              <div style="font-size: 60px; margin-bottom: 20px;">💤</div>
+              <h2 style="color: white; margin-bottom: 10px;">Cofre em Modo Repouso</h2>
+              <p>O rádio Wi-Fi foi desligado para economizar bateria.</p>
+              <p style="margin-top: 15px; font-size: 0.85rem;">Para religar a interface Web, digite <b style="color: #38bdf8;">*000#</b> no teclado do cofre.</p>
+            </div>
+          `;
+        }, 1200);
+      }
+    }
+
+    async function loadInitialStatus() {
+      try {
+        const res = await fetch('api.php?action=status').then(r => r.json());
+        if (res && res.status === 'ok') {
+          state.batteryV = res.batteryV;
+          state.solenoidPulseMs = res.pulseMs;
+          state.sleepTimeout = res.sleepTimeout;
+          
+          document.getElementById('batVoltage').innerHTML = `${res.batteryV} <span style="font-size: 0.8rem; color: var(--text-muted);">V</span>`;
+          document.getElementById('pulseDisplay').innerHTML = `${res.pulseMs} <span style="font-size: 0.8rem; color: var(--text-muted);">ms</span>`;
+          document.getElementById('pulseTimeInput').value = res.pulseMs;
+          document.getElementById('sleepTimeoutInput').value = res.sleepTimeout;
+        }
+      } catch (e) {
+        console.log('Modo autônomo offline ativo');
+      }
+    }
+
+    // Inicialização
+    renderLogs();
+    loadInitialStatus();
+  </script>
+</body>
+</html>
