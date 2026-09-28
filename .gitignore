@@ -1,0 +1,35 @@
+# PlatformIO
+.pio
+.pioenvs
+.piolibdeps
+
+# Arduino IDE
+build/
+*.hex
+*.elf
+*.bin
+
+# Python / MicroPython
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Editor / IDE
+.vscode/.browse.c_cpp.db*
+.vscode/c_cpp_properties.json
+.idea/
+
+# OS and system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# Logs and secrets
+*.log
+secrets.h
+secrets.json
