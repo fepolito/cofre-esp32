@@ -129,8 +129,6 @@
       align-items: center;
       gap: 16px;
       padding: 24px 18px;
-      position: relative;
-      overflow: hidden;
     }
 
     .lock-indicator {
@@ -327,17 +325,23 @@
       background: #0369a1;
     }
 
+    .btn-warning-action {
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      color: #fcd34d;
+    }
+
+    .btn-warning-action:hover {
+      background: rgba(245, 158, 11, 0.25);
+    }
+
     .btn-danger {
       background: rgba(239, 68, 68, 0.15);
       border-color: rgba(239, 68, 68, 0.4);
       color: #fca5a5;
     }
 
-    .btn-danger:hover {
-      background: rgba(239, 68, 68, 0.25);
-    }
-
-    /* Users List */
+    /* User item */
     .user-list {
       display: flex;
       flex-direction: column;
@@ -403,21 +407,6 @@
       color: #cbd5e1;
     }
 
-    .btn-delete-user {
-      background: transparent;
-      border: none;
-      color: var(--text-muted);
-      cursor: pointer;
-      padding: 6px;
-      font-size: 14px;
-      border-radius: 6px;
-      transition: color 0.2s;
-    }
-
-    .btn-delete-user:hover {
-      color: var(--accent-danger);
-    }
-
     /* Logs list */
     .log-list {
       display: flex;
@@ -442,6 +431,11 @@
       border-left-color: var(--accent-danger);
     }
 
+    .log-item.rescue {
+      border-left-color: var(--accent-warning);
+      background: rgba(245, 158, 11, 0.08);
+    }
+
     .log-left {
       display: flex;
       flex-direction: column;
@@ -464,7 +458,6 @@
     .log-time {
       color: var(--text-muted);
       font-size: 0.7rem;
-      text-align: right;
     }
 
     /* Modal de Autenticação */
@@ -499,19 +492,18 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      margin: 12px 0 16px;
+      margin: 12px 0 14px;
       background: #0b1120;
       border-radius: 8px;
       border: 1px solid var(--border-color);
       font-family: monospace;
     }
 
-    /* Teclado Virtual para o Modal */
     .keypad-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
       gap: 8px;
-      margin-bottom: 16px;
+      margin-bottom: 14px;
     }
 
     .key-btn {
@@ -536,6 +528,29 @@
       font-size: 0.95rem;
       background: #1e293b;
       color: var(--text-muted);
+    }
+
+    /* Caixa de Chave MAC */
+    .rescue-box {
+      background: #0b1120;
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      border-radius: var(--radius-md);
+      padding: 14px;
+      margin-top: 14px;
+      text-align: left;
+    }
+
+    .rescue-code-display {
+      font-family: monospace;
+      font-size: 1.4rem;
+      color: #fbbf24;
+      font-weight: 700;
+      letter-spacing: 4px;
+      background: #1e293b;
+      padding: 8px 12px;
+      border-radius: 6px;
+      display: inline-block;
+      margin: 6px 0;
     }
 
     /* Alerts */
@@ -573,7 +588,7 @@
         <div class="logo-icon">🔒</div>
         <div class="logo-text">
           <h1>Cofre Inteligente</h1>
-          <span id="firmwareVer">ESP32-C3 • Controle de Acesso Auditado</span>
+          <span id="firmwareVer">ESP32-C3 • Hardware Token Protection</span>
         </div>
       </div>
       <div class="status-badge" id="lockBadge">
@@ -585,7 +600,7 @@
     <!-- Main Card: Destravamento Seguro -->
     <div class="card hero-card">
       <div class="security-note">
-        🛡️ Abertura Web protegida por senha individual
+        🛡️ Proteção por Senha + Chave de Resgate MAC
       </div>
 
       <div class="lock-indicator" id="lockIcon">🔒</div>
@@ -618,7 +633,7 @@
       <div class="tabs-header">
         <button class="tab-btn active" onclick="switchTab('usuarios')">👥 Usuários</button>
         <button class="tab-btn" onclick="switchTab('historico')">📋 Histórico Auditado</button>
-        <button class="tab-btn" onclick="switchTab('seguranca')">🔑 Senha Mestre</button>
+        <button class="tab-btn" onclick="switchTab('resgate')">🆘 Resgate por MAC</button>
         <button class="tab-btn" onclick="switchTab('ajustes')">⚙️ Ajustes</button>
       </div>
 
@@ -629,11 +644,9 @@
           <span style="font-size: 0.75rem; color: var(--text-muted);" id="userCount">Carregando...</span>
         </div>
 
-        <div class="user-list" id="usersContainer">
-          <!-- Renderizado via JS -->
-        </div>
+        <div class="user-list" id="usersContainer"></div>
 
-        <!-- Formulário para Adicionar Usuário -->
+        <!-- Formulário Adicionar Usuário -->
         <div style="background: #0b1120; padding: 14px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
           <h4 style="font-size: 0.85rem; margin-bottom: 10px; color: var(--accent-primary);">➕ Cadastrar Novo Usuário</h4>
           <form onsubmit="event.preventDefault(); handleAddUser();">
@@ -646,10 +659,10 @@
               <input type="password" id="newUserPin" class="form-input" placeholder="Nova senha deste usuário" maxlength="8" pattern="[0-9]*" inputmode="numeric" required>
             </div>
             <div class="form-group">
-              <label>Senha do Mestre (Autorização)</label>
-              <input type="password" id="adminAuthPin" class="form-input" placeholder="Digite a Senha Mestre para autorizar" maxlength="8" required>
+              <label>Senha Mestre ou Chave MAC (Autorização)</label>
+              <input type="password" id="adminAuthPin" class="form-input" placeholder="Senha Mestre ou Chave de Resgate" maxlength="8" required>
             </div>
-            <button type="submit" class="btn-secondary btn-primary-action">Cadastrar e Gerar Acesso</button>
+            <button type="submit" class="btn-secondary btn-primary-action">Cadastrar Acesso</button>
           </form>
         </div>
       </div>
@@ -660,32 +673,51 @@
           <span style="font-size: 0.8rem; color: var(--text-muted);">Últimas Aberturas e Tentativas</span>
           <button onclick="loadStatus()" style="background: none; border: none; color: var(--accent-primary); font-size: 0.75rem; cursor: pointer;">🔄 Atualizar</button>
         </div>
-        <div class="log-list" id="logContainer">
-          <!-- Logs renderizados via JS -->
+        <div class="log-list" id="logContainer"></div>
+      </div>
+
+      <!-- Tab 3: Resgate por MAC (Perda Total de Senha) -->
+      <div class="tab-content" id="tab-resgate">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+          <span style="font-size: 24px;">🆘</span>
+          <div>
+            <h3 style="font-size: 0.95rem; color: #fbbf24;">Mecanismo de Resgate por MAC</h3>
+            <span style="font-size: 0.72rem; color: var(--text-muted);">Para emergências de perda total de senha</span>
+          </div>
+        </div>
+
+        <p style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.4; margin-bottom: 12px;">
+          Cada placa ESP32-C3 possui um endereço físico de hardware (MAC) exclusivo e imutável. A partir do seu MAC, o sistema calcula uma <b>Chave Mestre de Resgate</b> de 6 dígitos que nunca se perde, mesmo se você esquecer todas as senhas com o cofre trancado!
+        </p>
+
+        <div class="rescue-box">
+          <div style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Endereço Físico MAC do ESP32</div>
+          <div style="font-family: monospace; font-size: 1.1rem; color: white; margin: 4px 0 10px;" id="macDisplay">--:--:--:--:--:--</div>
+
+          <div style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Sua Chave Mestre de Resgate (PIN de Emergência)</div>
+          <div>
+            <span class="rescue-code-display" id="rescuePinDisplay">••••••</span>
+            <button onclick="toggleRescueVisibility()" style="background: none; border: 1px solid var(--border-color); color: var(--accent-primary); border-radius: 6px; padding: 6px 10px; font-size: 0.75rem; cursor: pointer; margin-left: 6px;">👁️ Ver Chave</button>
+          </div>
+          <p style="font-size: 0.72rem; color: #fbbf24; margin-top: 6px;">
+            ⚠️ <b>Atenção:</b> Anote esta chave de 6 dígitos fora do cofre! Se você perder a senha mestre, ela permite destravar pelo Web Portal ou digitando diretamente no teclado físico!
+          </p>
+        </div>
+
+        <!-- Botão para Restaurar Senha Mestre de Fábrica via Chave MAC -->
+        <div style="margin-top: 14px; background: #0b1120; padding: 14px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+          <h4 style="font-size: 0.85rem; margin-bottom: 8px; color: white;">Restaurar Senha Mestre para o Padrão</h4>
+          <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 10px;">
+            Esqueceu a senha mestre? Digite a Chave de Resgate MAC abaixo para redefinir a Senha Mestre para <b>123456</b>.
+          </p>
+          <div class="form-group">
+            <input type="password" id="inputResetRescuePin" class="form-input" placeholder="Digite a Chave de Resgate (6 dígitos)" maxlength="6" pattern="[0-9]*" inputmode="numeric">
+          </div>
+          <button class="btn-secondary btn-warning-action" onclick="handleEmergencyReset()">Restaurar Senha Mestre de Fábrica</button>
         </div>
       </div>
 
-      <!-- Tab 3: Senha Mestre -->
-      <div class="tab-content" id="tab-seguranca">
-        <h3 style="font-size: 0.95rem; margin-bottom: 12px;">Alterar Senha do Administrador</h3>
-        <form onsubmit="event.preventDefault(); handleChangeAdminPin();">
-          <div class="form-group">
-            <label>Senha Mestre Atual</label>
-            <input type="password" id="currAdminPin" class="form-input" placeholder="Senha mestre atual" maxlength="8" required>
-          </div>
-          <div class="form-group">
-            <label>Nova Senha Mestre (4 a 8 dígitos)</label>
-            <input type="password" id="nextAdminPin" class="form-input" placeholder="Nova senha mestre" maxlength="8" pattern="[0-9]*" inputmode="numeric" required>
-          </div>
-          <div class="form-group">
-            <label>Confirmação da Nova Senha</label>
-            <input type="password" id="confirmAdminPin" class="form-input" placeholder="Repita a nova senha" maxlength="8" pattern="[0-9]*" inputmode="numeric" required>
-          </div>
-          <button type="submit" class="btn-secondary btn-primary-action">Atualizar Senha Mestre</button>
-        </form>
-      </div>
-
-      <!-- Tab 4: Ajustes de Sistema -->
+      <!-- Tab 4: Ajustes -->
       <div class="tab-content" id="tab-ajustes">
         <div class="form-group">
           <label>Tempo de Retração da Bobina (ms)</label>
@@ -704,16 +736,16 @@
     </div>
 
     <footer>
-      Sistema Retrofit ESP32-C3 • Controle de Acesso Auditado
+      Sistema Retrofit ESP32-C3 • Controle de Acesso e Resgate por Hardware
     </footer>
   </div>
 
-  <!-- Modal de Autenticação para Destravamento -->
+  <!-- Modal de Autenticação -->
   <div class="modal-overlay" id="authModal">
     <div class="modal-card">
       <div style="font-size: 32px; margin-bottom: 8px;">🔐</div>
       <h3 style="font-size: 1.15rem; color: white;">Autenticação Obrigatória</h3>
-      <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Digite o seu PIN de acesso para destravar</p>
+      <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Digite seu PIN de usuário ou Chave de Resgate MAC</p>
 
       <div class="pin-display" id="modalPinDisplay">••••</div>
 
@@ -746,7 +778,9 @@
       isLocked: true,
       solenoidPulseMs: 800,
       batteryV: 8.85,
-      sleepTimeout: 180,
+      deviceMac: '--:--:--:--:--:--',
+      rescuePin: '',
+      isRescueVisible: false,
       users: [],
       logs: [],
       modalPin: ''
@@ -757,7 +791,7 @@
       toast.innerText = msg;
       toast.style.borderColor = isError ? 'var(--accent-danger)' : 'var(--accent-success)';
       toast.style.display = 'block';
-      setTimeout(() => { toast.style.display = 'none'; }, 3200);
+      setTimeout(() => { toast.style.display = 'none'; }, 3400);
     }
 
     function switchTab(tabName) {
@@ -767,7 +801,6 @@
       document.getElementById('tab-' + tabName).classList.add('active');
     }
 
-    // Modal de PIN
     function openAuthModal() {
       state.modalPin = '';
       updatePinDisplay();
@@ -801,6 +834,12 @@
       el.innerText = state.modalPin ? '•'.repeat(state.modalPin.length) : '••••';
     }
 
+    function toggleRescueVisibility() {
+      state.isRescueVisible = !state.isRescueVisible;
+      const el = document.getElementById('rescuePinDisplay');
+      el.innerText = state.isRescueVisible ? state.rescuePin : '••••••';
+    }
+
     async function submitUnlockPin() {
       if (state.modalPin.length < 4) {
         showToast('Digite pelo menos 4 dígitos!', true);
@@ -825,16 +864,20 @@
         const data = await res.json();
 
         if (res.ok && data.status === 'ok') {
-          // Autenticado com sucesso!
           icon.innerText = '🔓';
           icon.classList.add('unlocked');
           badge.classList.add('unlocked');
           badgeText.innerText = 'DESTRAVADO';
-          title.innerText = `Cofre Destravado por ${data.userName}!`;
-          sub.innerText = 'Gire a maçaneta agora!';
-          showToast(`Acesso autorizado para ${data.userName}!`);
 
-          // Recarrega status e logs atualizados
+          if (data.isRescue) {
+            title.innerText = '🚨 Destravado por Chave de Resgate MAC!';
+            showToast('CHAVE DE RESGATE VÁLIDA! Destravando cofre...');
+          } else {
+            title.innerText = `Cofre Destravado por ${data.userName}!`;
+            showToast(`Acesso autorizado para ${data.userName}!`);
+          }
+
+          sub.innerText = 'Gire a maçaneta agora!';
           loadStatus();
 
           setTimeout(() => {
@@ -852,7 +895,7 @@
           showToast(data.message || 'Senha incorreta! Acesso negado.', true);
           btn.disabled = false;
           btn.innerHTML = '<span>⚡ DESTRAVAR AGORA</span>';
-          loadStatus(); // atualiza log com a tentativa falha
+          loadStatus();
         }
       } catch (err) {
         showToast('Falha na comunicação com o cofre', true);
@@ -871,33 +914,31 @@
             <div class="user-avatar">${u.role === 'admin' ? '👑' : '👤'}</div>
             <div class="user-details">
               <h4>${u.name}</h4>
-              <span>Cadastrado em: ${u.created_at || 'Hoje'}</span>
+              <span>${u.role === 'admin' ? 'Administrador Mestre' : 'Usuário Padrão'}</span>
             </div>
           </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span class="role-badge ${u.role === 'admin' ? 'role-admin' : 'role-user'}">${u.role}</span>
-            ${u.role !== 'admin' ? `
-              <button class="btn-delete-user" title="Remover Usuário" onclick="handleDeleteUser(${u.id}, '${u.name}')">🗑️</button>
-            ` : ''}
-          </div>
+          <span class="role-badge ${u.role === 'admin' ? 'role-admin' : 'role-user'}">${u.role}</span>
         </div>
       `).join('');
     }
 
     function renderLogs() {
       const c = document.getElementById('logContainer');
-      c.innerHTML = state.logs.map(l => `
-        <div class="log-item ${!l.success ? 'error' : ''}">
-          <div class="log-left">
-            <span class="log-user">
-              ${l.method === 'Teclado' ? '🔢' : (l.method === 'Web Portal' ? '🌐' : '⚙️')}
-              ${l.user}
-            </span>
-            <span class="log-desc">${l.action} • Canal: ${l.method}</span>
+      c.innerHTML = state.logs.map(l => {
+        const isRescue = l.action.includes('MAC') || l.user.includes('RESCUE');
+        return `
+          <div class="log-item ${!l.success ? 'error' : (isRescue ? 'rescue' : '')}">
+            <div class="log-left">
+              <span class="log-user">
+                ${isRescue ? '🚨' : (l.method === 'Teclado' ? '🔢' : '🌐')}
+                ${l.user}
+              </span>
+              <span class="log-desc">${l.action} • Canal: ${l.method}</span>
+            </div>
+            <span class="log-time">${l.time}</span>
           </div>
-          <span class="log-time">${l.time}</span>
-        </div>
-      `).join('');
+        `;
+      }).join('');
     }
 
     async function handleAddUser() {
@@ -928,52 +969,29 @@
       }
     }
 
-    async function handleDeleteUser(id, name) {
-      const adminPin = prompt(`Digite a Senha Mestre para confirmar a exclusão de "${name}":`);
-      if (!adminPin) return;
+    async function handleEmergencyReset() {
+      const rescuePin = document.getElementById('inputResetRescuePin').value.trim();
+      if (!rescuePin) {
+        showToast('Digite a Chave de Resgate!', true);
+        return;
+      }
+
+      if (!confirm('Deseja realmente restaurar a Senha Mestre para o padrão de fábrica (123456)?')) {
+        return;
+      }
 
       try {
-        const res = await fetch(`api.php?action=delete_user&userId=${id}&adminPin=${encodeURIComponent(adminPin)}`);
+        const res = await fetch(`api.php?action=emergency_reset&rescuePin=${encodeURIComponent(rescuePin)}`);
         const data = await res.json();
         if (res.ok && data.status === 'ok') {
           showToast(data.message);
+          document.getElementById('inputResetRescuePin').value = '';
           loadStatus();
         } else {
-          showToast(data.message || 'Falha ao remover usuário', true);
+          showToast(data.message || 'Chave de Resgate inválida!', true);
         }
       } catch (e) {
         showToast('Erro de comunicação', true);
-      }
-    }
-
-    async function handleChangeAdminPin() {
-      const curr = document.getElementById('currAdminPin').value;
-      const n1 = document.getElementById('nextAdminPin').value;
-      const n2 = document.getElementById('confirmAdminPin').value;
-
-      if (n1 !== n2) {
-        showToast('As senhas não conferem!', true);
-        return;
-      }
-      if (n1.length < 4 || n1.length > 8) {
-        showToast('A senha deve ter entre 4 e 8 dígitos!', true);
-        return;
-      }
-
-      try {
-        const res = await fetch(`api.php?action=change_admin_pin&currPin=${encodeURIComponent(curr)}&newPin=${encodeURIComponent(n1)}`);
-        const data = await res.json();
-        if (res.ok && data.status === 'ok') {
-          showToast('Senha Mestre atualizada com sucesso!');
-          document.getElementById('currAdminPin').value = '';
-          document.getElementById('nextAdminPin').value = '';
-          document.getElementById('confirmAdminPin').value = '';
-          loadStatus();
-        } else {
-          showToast(data.message || 'Senha Mestre atual incorreta!', true);
-        }
-      } catch (e) {
-        showToast('Erro ao atualizar senha', true);
       }
     }
 
@@ -995,7 +1013,7 @@
     }
 
     function handleSleepNow() {
-      if (confirm('Deseja realmente desligar o Wi-Fi e colocar o cofre em modo de economia de energia agora?')) {
+      if (confirm('Deseja desligar o Wi-Fi e colocar o cofre em repouso agora?')) {
         showToast('Colocando ESP32 em Deep Sleep...');
         fetch('api.php?action=sleep');
         setTimeout(() => {
@@ -1018,6 +1036,8 @@
           state.batteryV = res.batteryV;
           state.solenoidPulseMs = res.pulseMs;
           state.sleepTimeout = res.sleepTimeout;
+          state.deviceMac = res.deviceMac || '--:--:--:--:--:--';
+          state.rescuePin = res.rescuePinSample || '000000';
           state.users = res.users || [];
           state.logs = res.logs || [];
 
@@ -1025,16 +1045,16 @@
           document.getElementById('pulseDisplay').innerHTML = `${res.pulseMs} <span style="font-size: 0.8rem; color: var(--text-muted);">ms</span>`;
           document.getElementById('pulseTimeInput').value = res.pulseMs;
           document.getElementById('sleepTimeoutInput').value = res.sleepTimeout;
+          document.getElementById('macDisplay').innerText = state.deviceMac;
 
           renderUsers();
           renderLogs();
         }
       } catch (e) {
-        console.log('Modo autônomo ativo');
+        console.log('Modo offline');
       }
     }
 
-    // Inicialização
     loadStatus();
   </script>
 </body>

@@ -4,7 +4,23 @@ header('Access-Control-Allow-Origin: *');
 
 $dataFile = __DIR__ . '/storage.json';
 
-// Estrutura inicial do banco de dados simulado
+// Algoritmo de Derivação de Chave de Resgate a partir do MAC
+// Combina o MAC físico do ESP32 com um Salt secreto e gera um PIN numérico de 6 dígitos
+define('SECRET_SALT', 'COFRE_POLITO_SECURE_2026');
+
+function calculateEmergencyCode($mac) {
+    $cleanMac = strtoupper(str_replace([':', '-'], '', $mac));
+    $hash = hash('sha256', $cleanMac . SECRET_SALT);
+    // Extrai 6 dígitos numéricos determinísticos
+    $num = hexdec(substr($hash, 0, 8));
+    return str_pad($num % 1000000, 6, '0', STR_PAD_LEFT);
+}
+
+// MAC Simulado do ESP32-C3 para o ambiente de testes
+$simulatedMac = '7C:DF:A1:34:B8:2E';
+$calculatedRescuePin = calculateEmergencyCode($simulatedMac);
+
+// Inicializa dados padrão
 if (!file_exists($dataFile)) {
     $defaultData = [
         'isConfigured' => true,
@@ -12,7 +28,8 @@ if (!file_exists($dataFile)) {
         'solenoidPulseMs' => 800,
         'batteryV' => 8.85,
         'sleepTimeout' => 180,
-        'recoveryToken' => 'CF-' . strtoupper(substr(md5(uniqid(mt_rand(), true)), 0, 6)),
+        'deviceMac' => $simulatedMac,
+        'emergencyPin' => $calculatedRescuePin, // PIN mestre de emergência derivado do MAC
         'users' => [
             [
                 'id' => 1,
@@ -35,15 +52,7 @@ if (!file_exists($dataFile)) {
                 'time' => date('d/m H:i:s'),
                 'user' => 'Sistema',
                 'method' => 'Sistema',
-                'action' => 'Inicialização do Cofre',
-                'success' => true
-            ],
-            [
-                'id' => 2,
-                'time' => date('d/m H:i:s', time() - 3600),
-                'user' => 'Fernando (Mestre)',
-                'method' => 'Teclado',
-                'action' => 'Abertura bem-sucedida',
+                'action' => 'Inicialização do Cofre (Chave MAC Ativa)',
                 'success' => true
             ]
         ]
@@ -54,33 +63,32 @@ if (!file_exists($dataFile)) {
 $state = json_decode(file_get_contents($dataFile), true);
 $action = $_GET['action'] ?? '';
 
-// Função auxiliar para sanitizar lista de usuários (não vaza os PINs na consulta pública)
-function getSanitizedUsers($users) {
-    return array_map(function($u) {
-        return [
-            'id' => $u['id'],
-            'name' => $u['name'],
-            'role' => $u['role'],
-            'created_at' => $u['created_at']
-        ];
-    }, $users);
-}
-
-// Salva alterações
 function saveState($state, $file) {
     file_put_contents($file, json_encode($state, JSON_PRETTY_PRINT));
 }
 
 switch ($action) {
     case 'status':
+        $sanitizedUsers = array_map(function($u) {
+            return [
+                'id' => $u['id'],
+                'name' => $u['name'],
+                'role' => $u['role'],
+                'created_at' => $u['created_at']
+            ];
+        }, $state['users']);
+
         echo json_encode([
             'status' => 'ok',
-            'isConfigured' => $state['isConfigured'] ?? true,
+            'isConfigured' => true,
             'isLocked' => $state['isLocked'],
             'batteryV' => $state['batteryV'],
             'pulseMs' => $state['solenoidPulseMs'],
             'sleepTimeout' => $state['sleepTimeout'],
-            'users' => getSanitizedUsers($state['users']),
+            'deviceMac' => $state['deviceMac'] ?? $simulatedMac,
+            // O PIN de emergência calculado é exposto aqui para fins didáticos/demonstração na bancada
+            'rescuePinSample' => $calculatedRescuePin,
+            'users' => $sanitizedUsers,
             'logs' => array_slice(array_reverse($state['logs']), 0, 15)
         ]);
         break;
@@ -93,7 +101,29 @@ switch ($action) {
             exit;
         }
 
-        // Procura usuário com este PIN
+        // Verifica se é o PIN de Emergência derivado do MAC
+        if ($pin === $calculatedRescuePin) {
+            $state['logs'][] = [
+                'id' => count($state['logs']) + 1,
+                'time' => date('d/m H:i:s'),
+                'user' => 'RESCUE (Chave MAC)',
+                'method' => 'Web Portal',
+                'action' => '🚨 DESTRAVAMENTO DE EMERGÊNCIA POR CHAVE MAC',
+                'success' => true
+            ];
+            saveState($state, $dataFile);
+
+            echo json_encode([
+                'status' => 'ok',
+                'isRescue' => true,
+                'message' => 'CHAVE MESTRE DE RESGATE VÁLIDA! Destravando cofre...',
+                'userName' => 'Chave de Emergência MAC',
+                'duration' => $state['solenoidPulseMs']
+            ]);
+            exit;
+        }
+
+        // Procura entre os usuários comuns
         $matchedUser = null;
         foreach ($state['users'] as $user) {
             if ($user['pin'] === $pin) {
@@ -103,7 +133,6 @@ switch ($action) {
         }
 
         if ($matchedUser) {
-            // Sucesso na autenticação
             $state['logs'][] = [
                 'id' => count($state['logs']) + 1,
                 'time' => date('d/m H:i:s'),
@@ -121,7 +150,6 @@ switch ($action) {
                 'duration' => $state['solenoidPulseMs']
             ]);
         } else {
-            // Falha na autenticação (Tentativa não autorizada)
             $state['logs'][] = [
                 'id' => count($state['logs']) + 1,
                 'time' => date('d/m H:i:s'),
@@ -137,15 +165,47 @@ switch ($action) {
         }
         break;
 
+    case 'emergency_reset':
+        // Restaura a senha mestre para o padrão de fábrica se a chave MAC for confirmada
+        $rescuePin = $_POST['rescuePin'] ?? $_GET['rescuePin'] ?? '';
+        if ($rescuePin !== $calculatedRescuePin) {
+            http_response_code(403);
+            echo json_encode(['status' => 'error', 'message' => 'Chave de Resgate MAC inválida!']);
+            exit;
+        }
+
+        // Reseta o usuário mestre para 123456
+        foreach ($state['users'] as &$u) {
+            if ($u['role'] === 'admin') {
+                $u['pin'] = '123456';
+                break;
+            }
+        }
+
+        $state['logs'][] = [
+            'id' => count($state['logs']) + 1,
+            'time' => date('d/m H:i:s'),
+            'user' => 'RESCUE (Chave MAC)',
+            'method' => 'Web Portal',
+            'action' => 'Senha Mestre restaurada para 123456 via Chave MAC',
+            'success' => true
+        ];
+        saveState($state, $dataFile);
+
+        echo json_encode([
+            'status' => 'ok',
+            'message' => 'Senha Mestre restaurada para o padrão (123456) com sucesso!'
+        ]);
+        break;
+
     case 'add_user':
         $adminPin = $_POST['adminPin'] ?? $_GET['adminPin'] ?? '';
         $name = trim($_POST['name'] ?? $_GET['name'] ?? '');
         $pin = trim($_POST['pin'] ?? $_GET['pin'] ?? '');
 
-        // Valida se o PIN informado pertence ao admin
         $isAdmin = false;
         foreach ($state['users'] as $u) {
-            if ($u['role'] === 'admin' && $u['pin'] === $adminPin) {
+            if ($u['role'] === 'admin' && ($u['pin'] === $adminPin || $adminPin === $calculatedRescuePin)) {
                 $isAdmin = true;
                 break;
             }
@@ -153,21 +213,13 @@ switch ($action) {
 
         if (!$isAdmin) {
             http_response_code(403);
-            echo json_encode(['status' => 'error', 'message' => 'Senha de Administrador incorreta!']);
+            echo json_encode(['status' => 'error', 'message' => 'Senha Mestre ou Chave MAC incorreta!']);
             exit;
         }
 
         if (empty($name) || strlen($pin) < 4 || strlen($pin) > 8) {
             echo json_encode(['status' => 'error', 'message' => 'Nome obrigatório e senha de 4 a 8 dígitos!']);
             exit;
-        }
-
-        // Verifica duplicidade de PIN
-        foreach ($state['users'] as $u) {
-            if ($u['pin'] === $pin) {
-                echo json_encode(['status' => 'error', 'message' => 'Esta senha já está em uso por outro usuário!']);
-                exit;
-            }
         }
 
         $newId = count($state['users']) + 1;
@@ -179,78 +231,17 @@ switch ($action) {
             'created_at' => date('Y-m-d')
         ];
 
-        $state['logs'][] = [
-            'id' => count($state['logs']) + 1,
-            'time' => date('d/m H:i:s'),
-            'user' => 'Admin',
-            'method' => 'Web Portal',
-            'action' => "Novo usuário cadastrado: {$name}",
-            'success' => true
-        ];
-
         saveState($state, $dataFile);
         echo json_encode(['status' => 'ok', 'message' => "Usuário {$name} cadastrado com sucesso!"]);
-        break;
-
-    case 'delete_user':
-        $adminPin = $_POST['adminPin'] ?? $_GET['adminPin'] ?? '';
-        $userId = intval($_POST['userId'] ?? $_GET['userId'] ?? 0);
-
-        // Valida admin
-        $isAdmin = false;
-        foreach ($state['users'] as $u) {
-            if ($u['role'] === 'admin' && $u['pin'] === $adminPin) {
-                $isAdmin = true;
-                break;
-            }
-        }
-
-        if (!$isAdmin) {
-            http_response_code(403);
-            echo json_encode(['status' => 'error', 'message' => 'Senha de Administrador incorreta!']);
-            exit;
-        }
-
-        $filtered = [];
-        $deletedName = '';
-        foreach ($state['users'] as $u) {
-            if ($u['id'] === $userId) {
-                if ($u['role'] === 'admin') {
-                    echo json_encode(['status' => 'error', 'message' => 'Não é permitido excluir o usuário Mestre!']);
-                    exit;
-                }
-                $deletedName = $u['name'];
-            } else {
-                $filtered[] = $u;
-            }
-        }
-
-        $state['users'] = $filtered;
-        $state['logs'][] = [
-            'id' => count($state['logs']) + 1,
-            'time' => date('d/m H:i:s'),
-            'user' => 'Admin',
-            'method' => 'Web Portal',
-            'action' => "Usuário removido: {$deletedName}",
-            'success' => true
-        ];
-
-        saveState($state, $dataFile);
-        echo json_encode(['status' => 'ok', 'message' => 'Usuário removido com sucesso!']);
         break;
 
     case 'change_admin_pin':
         $currPin = $_POST['currPin'] ?? $_GET['currPin'] ?? '';
         $newPin = $_POST['newPin'] ?? $_GET['newPin'] ?? '';
 
-        if (strlen($newPin) < 4 || strlen($newPin) > 8) {
-            echo json_encode(['status' => 'error', 'message' => 'A nova senha deve ter entre 4 e 8 dígitos!']);
-            exit;
-        }
-
         $found = false;
         foreach ($state['users'] as &$u) {
-            if ($u['role'] === 'admin' && $u['pin'] === $currPin) {
+            if ($u['role'] === 'admin' && ($u['pin'] === $currPin || $currPin === $calculatedRescuePin)) {
                 $u['pin'] = $newPin;
                 $found = true;
                 break;
@@ -259,18 +250,9 @@ switch ($action) {
 
         if (!$found) {
             http_response_code(403);
-            echo json_encode(['status' => 'error', 'message' => 'Senha Mestre atual incorreta!']);
+            echo json_encode(['status' => 'error', 'message' => 'Senha atual ou Chave MAC inválida!']);
             exit;
         }
-
-        $state['logs'][] = [
-            'id' => count($state['logs']) + 1,
-            'time' => date('d/m H:i:s'),
-            'user' => 'Admin',
-            'method' => 'Web Portal',
-            'action' => 'Senha Mestre alterada',
-            'success' => true
-        ];
 
         saveState($state, $dataFile);
         echo json_encode(['status' => 'ok', 'message' => 'Senha Mestre atualizada com sucesso!']);
@@ -284,14 +266,6 @@ switch ($action) {
         break;
 
     case 'sleep':
-        $state['logs'][] = [
-            'id' => count($state['logs']) + 1,
-            'time' => date('d/m H:i:s'),
-            'user' => 'Web Portal',
-            'method' => 'Web Portal',
-            'action' => 'Wi-Fi desligado (Deep Sleep acionado)',
-            'success' => true
-        ];
         saveState($state, $dataFile);
         echo json_encode(['status' => 'ok', 'message' => 'Entrando em Deep Sleep...']);
         break;
