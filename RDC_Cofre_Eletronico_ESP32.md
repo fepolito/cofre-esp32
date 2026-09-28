@@ -92,7 +92,7 @@ Existem dois padrões construtivos comuns em placas de teclado de cofres residen
 
 ### 4.1. Requisitos Funcionais (RF)
 
-* **RF01 - Abertura por Senha Numérica:** O sistema deve permitir destravar o cofre digitando uma sequência configurável de 4 a 8 dígitos seguida de `#`.
+* **RF01 - Abertura por Senha Numérica (Individualizada):** O sistema deve permitir destravar o cofre digitando uma sequência configurável de 4 a 8 dígitos seguida de `#`. Cada usuário cadastrado possui seu próprio PIN numérico.
 * **RF02 - Feedback Audiovisual:**
   * Bip curto a cada tecla pressionada.
   * Bip duplo e LED verde para senha correta + retração da bobina.
@@ -101,20 +101,22 @@ Existem dois padrões construtivos comuns em placas de teclado de cofres residen
 * **RF04 - Modo Wi-Fi Captive Portal Sob Demanda:**
   * Para economizar bateria, o Wi-Fi **permanece desligado** por padrão.
   * O Wi-Fi só será ativado quando uma combinação especial for digitada no teclado (ex: `*000#` ou segurar `*` por 3 segundos).
-  * Ao ativar, o ESP32 entra em modo SoftAP gerando uma rede Wi-Fi própria (ex: `Cofre-Smart`).
+  * Ao ativar, o ESP32 entra em modo SoftAP gerando uma rede Wi-Fi própria (`Cofre-Smart-Setup`).
   * Qualquer celular conectado é direcionado automaticamente para a página de gestão (Captive Portal DNS).
-* **RF05 - Funcionalidades da Interface Web (Captive Portal):**
-  * Botão de "Destravar Agora" (emergência/conveniência).
-  * Alteração da Senha Mestre e Senha de Usuário.
-  * Configuração do tempo de acionamento do solenoide (em milissegundos).
-  * Leitura e indicação da tensão da bateria (se implementado monitoramento via ADC).
-  * Log das últimas aberturas (timestamp relativo ou contador).
-  * Botão "Encerrar e Dormir" (desliga Wi-Fi imediatamente).
-* **RF06 - Timeout de Inatividade Wi-Fi:** Se nenhuma ação for tomada na interface Web em até 3 minutos, o rádio Wi-Fi desliga automaticamente e o ESP32 retorna ao modo de repouso.
-* **RF07 - Bloqueio Anti-Força Bruta:**
+* **RF05 - Autenticação Obrigatória no Captive Portal (Sem Abertura Aberta):**
+  * O botão de destravamento no portal Web **exige autenticação por PIN**. Nenhum usuário anônimo ou dispositivo que apenas conectou no Wi-Fi poderá acionar a bobina sem digitar um PIN cadastrado.
+  * O sistema identifica qual usuário autenticou e autorizou o destravamento.
+* **RF06 - Gestão de Múltiplos Usuários (Mestre e Usuários):**
+  * **Usuário Mestre (Admin):** Permissão total para abrir, cadastrar novos usuários, remover usuários, alterar tempos de pulso e visualizar o histórico completo.
+  * **Usuários Padrão:** Cada um possui nome amigável (ex: "Carlos", "Família") e PIN próprio de 4 a 8 dígitos. Aberturas pelo teclado físico ou Web identificam exatamente quem abriu.
+* **RF07 - Log de Auditoria Personalizado:**
+  * Registro detalhado em memória não-volátil (NVS) das últimas aberturas e tentativas.
+  * Informações registradas: Data/Hora, Usuário Identificado, Canal de Acesso (Teclado Físico ou Portal Web), Ação e Status (Sucesso/Falha).
+* **RF08 - Timeout de Inatividade Wi-Fi:** Se nenhuma ação for tomada na interface Web em até 3 minutos, o rádio Wi-Fi desliga automaticamente e o ESP32 retorna ao modo Deep Sleep.
+* **RF09 - Bloqueio Anti-Força Bruta:**
   * 3 tentativas consecutivas de senha incorreta geram bloqueio temporário de 1 minuto.
-  * 5 tentativas incorretas geram bloqueio de 5 minutos com acionamento do buzzer intermitente.
-* **RF08 - Botão Físico de Reset/Programação Interno:** Microswitch localizado no interior do cofre para restauração da senha de fábrica caso a senha seja esquecida (disponível somente com o cofre fisicamente aberto).
+  * 5 tentativas incorretas geram bloqueio de 5 minutos com bips de alarme.
+* **RF10 - Botão Físico de Reset/Programação Interno:** Microswitch localizado no interior do cofre para restauração da senha de fábrica caso a Senha Mestre seja esquecida (disponível somente com o cofre fisicamente aberto).
 
 ---
 

@@ -1,19 +1,97 @@
 {
+    "isConfigured": true,
     "isLocked": true,
     "solenoidPulseMs": 800,
     "batteryV": 8.85,
     "sleepTimeout": 180,
-    "passcode": "123456",
-    "logs": [
+    "recoveryToken": "CF-5449BB",
+    "users": [
         {
-            "time": "14:50:38",
-            "text": "Servidor Laragon (Simulador ESP32-C3) iniciado",
-            "error": false
+            "id": 1,
+            "name": "Fernando (Mestre)",
+            "pin": "123456",
+            "role": "admin",
+            "created_at": "2026-09-28"
         },
         {
-            "time": "14:51:04",
-            "text": "Comando de destravamento recebido via Web",
-            "error": false
+            "id": 2,
+            "name": "Fam\u00edlia \/ Reserva",
+            "pin": "2580",
+            "role": "user",
+            "created_at": "2026-09-28"
+        },
+        {
+            "id": 3,
+            "name": "Carlos",
+            "pin": "4321",
+            "role": "user",
+            "created_at": "2026-09-28"
+        }
+    ],
+    "logs": [
+        {
+            "id": 1,
+            "time": "28\/09 15:10:37",
+            "user": "Sistema",
+            "method": "Sistema",
+            "action": "Inicializa\u00e7\u00e3o do Cofre",
+            "success": true
+        },
+        {
+            "id": 2,
+            "time": "28\/09 14:10:37",
+            "user": "Fernando (Mestre)",
+            "method": "Teclado",
+            "action": "Abertura bem-sucedida",
+            "success": true
+        },
+        {
+            "id": 3,
+            "time": "28\/09 15:10:47",
+            "user": "Desconhecido",
+            "method": "Web Portal",
+            "action": "Tentativa de senha inv\u00e1lida",
+            "success": false
+        },
+        {
+            "id": 4,
+            "time": "28\/09 15:11:03",
+            "user": "Fernando (Mestre)",
+            "method": "Web Portal",
+            "action": "Abertura autorizada",
+            "success": true
+        },
+        {
+            "id": 5,
+            "time": "28\/09 15:12:22",
+            "user": "Desconhecido",
+            "method": "Web Portal",
+            "action": "Tentativa de senha inv\u00e1lida",
+            "success": false
+        },
+        {
+            "id": 6,
+            "time": "28\/09 15:12:53",
+            "user": "Desconhecido",
+            "method": "Web Portal",
+            "action": "Tentativa de senha inv\u00e1lida",
+            "success": false
+        },
+        {
+            "id": 7,
+            "time": "28\/09 15:13:32",
+            "user": "Admin",
+            "method": "Web Portal",
+            "action": "Novo usu\u00e1rio cadastrado: Carlos",
+            "success": true
+        },
+        {
+            "id": 8,
+            "time": "28\/09 15:13:51",
+            "user": "Carlos",
+            "method": "Web Portal",
+            "action": "Abertura autorizada",
+            "success": true
         }
     ]
 }
