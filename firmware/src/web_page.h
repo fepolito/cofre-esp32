@@ -86,7 +86,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .key-btn:active { background: var(--accent-primary); color: black; }
     .key-btn.action-btn { font-size: 0.95rem; background: #1e293b; color: var(--text-muted); }
     .rescue-box { background: #0b1120; border: 1px solid rgba(245, 158, 11, 0.4); border-radius: var(--radius-md); padding: 14px; margin-top: 14px; text-align: left; }
-    .rescue-code-display { font-family: monospace; font-size: 1.4rem; color: #fbbf24; font-weight: 700; letter-spacing: 4px; background: #1e293b; padding: 8px 12px; border-radius: 6px; display: inline-block; margin: 6px 0; }
     .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #1e293b; color: white; padding: 12px 20px; border-radius: 30px; font-size: 0.9rem; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6); z-index: 2000; display: none; border: 1px solid #475569; }
     footer { text-align: center; color: var(--text-muted); font-size: 0.75rem; margin-top: 8px; padding: 10px; }
   </style>
@@ -98,7 +97,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <div class="logo-icon">🔒</div>
         <div class="logo-text">
           <h1>Cofre Inteligente</h1>
-          <span>ESP32-C3 • Hardware Token Protection</span>
+          <span>ESP32-C3 • Zero-Knowledge Rescue Token</span>
         </div>
       </div>
       <div class="status-badge" id="lockBadge">
@@ -108,7 +107,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     </header>
 
     <div class="card hero-card">
-      <div class="security-note">🛡️ Proteção por Senha + Chave de Resgate MAC</div>
+      <div class="security-note">🛡️ Proteção por Senha + Chave de Resgate Offline</div>
       <div class="lock-indicator" id="lockIcon">🔒</div>
       <div>
         <h2 id="heroTitle" style="font-size: 1.3rem; margin-bottom: 4px;">Cofre Trancado</h2>
@@ -158,8 +157,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
               <input type="password" id="newUserPin" class="form-input" placeholder="Nova senha" maxlength="8" pattern="[0-9]*" inputmode="numeric" required>
             </div>
             <div class="form-group">
-              <label>Senha do Mestre ou Chave MAC (Autorização)</label>
-              <input type="password" id="adminAuthPin" class="form-input" placeholder="Senha Mestre ou Chave de Resgate" maxlength="8" required>
+              <label>Senha do Mestre (Autorização)</label>
+              <input type="password" id="adminAuthPin" class="form-input" placeholder="Senha Mestre" maxlength="8" required>
             </div>
             <button type="submit" class="btn-secondary btn-primary-action">Cadastrar Acesso</button>
           </form>
@@ -178,38 +177,35 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
           <span style="font-size: 24px;">🆘</span>
           <div>
-            <h3 style="font-size: 0.95rem; color: #fbbf24;">Mecanismo de Resgate por MAC</h3>
-            <span style="font-size: 0.72rem; color: var(--text-muted);">Para emergências de perda total de senha</span>
+            <h3 style="font-size: 0.95rem; color: #fbbf24;">Centro de Resgate de Emergência</h3>
+            <span style="font-size: 0.72rem; color: var(--text-muted);">Recuperação de Perda Total de Senhas</span>
           </div>
         </div>
 
-        <p style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.4; margin-bottom: 12px;">
-          Cada placa ESP32-C3 possui um endereço físico de hardware (MAC) exclusivo e imutável. A partir do seu MAC, o sistema calcula uma <b>Chave Mestre de Resgate</b> de 6 dígitos que nunca se perde, mesmo se você esquecer todas as senhas com o cofre trancado!
-        </p>
-
         <div class="rescue-box">
-          <div style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Endereço Físico MAC do ESP32</div>
-          <div style="font-family: monospace; font-size: 1.1rem; color: white; margin: 4px 0 10px;" id="macDisplay">--:--:--:--:--:--</div>
-
-          <div style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Sua Chave Mestre de Resgate (PIN de Emergência)</div>
-          <div>
-            <span class="rescue-code-display" id="rescuePinDisplay">••••••</span>
-            <button onclick="toggleRescueVisibility()" style="background: none; border: 1px solid var(--border-color); color: var(--accent-primary); border-radius: 6px; padding: 6px 10px; font-size: 0.75rem; cursor: pointer; margin-left: 6px;">👁️ Ver Chave</button>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">ID de Hardware (MAC)</span>
+            <span style="font-family: monospace; font-size: 0.85rem; color: white; background: #1e293b; padding: 2px 8px; border-radius: 4px;" id="macDisplay">--:--:--:--:--:--</span>
           </div>
-          <p style="font-size: 0.72rem; color: #fbbf24; margin-top: 6px;">
-            ⚠️ <b>Atenção:</b> Anote esta chave fora do cofre! Se você perder a senha mestre, ela permite destravar pelo Web Portal ou pelo teclado físico!
+          <p style="font-size: 0.78rem; color: #cbd5e1; line-height: 1.4; margin-top: 10px;">
+            🔒 <b>Política de Segurança Rigorosa:</b><br>
+            A Chave Mestre de Resgate <u>NUNCA</u> é exibida neste portal para impedir que pessoas não autorizadas descubram o código ao conectar no Wi-Fi.
+          </p>
+          <p style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.4; margin-top: 6px;">
+            A Chave foi gerada pela sua ferramenta offline (<code>tools/gerar_chave_resgate.py</code>) a partir do MAC do ESP32 e guardada com você fora do cofre.
           </p>
         </div>
 
         <div style="margin-top: 14px; background: #0b1120; padding: 14px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
-          <h4 style="font-size: 0.85rem; margin-bottom: 8px; color: white;">Restaurar Senha Mestre para o Padrão</h4>
-          <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 10px;">
-            Esqueceu a senha mestre? Digite a Chave de Resgate MAC abaixo para redefinir a Senha Mestre para <b>123456</b>.
-          </p>
+          <h4 style="font-size: 0.85rem; margin-bottom: 8px; color: white;">Executar Resgate com a Chave</h4>
           <div class="form-group">
-            <input type="password" id="inputResetRescuePin" class="form-input" placeholder="Digite a Chave de Resgate (6 dígitos)" maxlength="6" pattern="[0-9]*" inputmode="numeric">
+            <label>Sua Chave Mestre de Resgate (6 dígitos guardada por você)</label>
+            <input type="password" id="inputRescueActionPin" class="form-input" placeholder="Digite a chave de 6 dígitos" maxlength="6" pattern="[0-9]*" inputmode="numeric">
           </div>
-          <button class="btn-secondary btn-warning-action" onclick="handleEmergencyReset()">Restaurar Senha Mestre de Fábrica</button>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <button class="btn-secondary btn-warning-action" onclick="handleEmergencyUnlockAction()">⚡ Destravar Cofre em Emergência</button>
+            <button class="btn-secondary" style="border-color: #64748b; font-size: 0.8rem;" onclick="handleEmergencyResetAction()">🔄 Redefinir Senha Mestre para 123456</button>
+          </div>
         </div>
       </div>
 
@@ -229,7 +225,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <div class="modal-card">
       <div style="font-size: 32px; margin-bottom: 8px;">🔐</div>
       <h3 style="font-size: 1.15rem; color: white;">Autenticação Obrigatória</h3>
-      <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Digite seu PIN de usuário ou Chave de Resgate MAC</p>
+      <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Digite seu PIN de usuário ou Chave de Resgate</p>
       <div class="pin-display" id="modalPinDisplay">••••</div>
       <div class="keypad-grid">
         <button class="key-btn" onclick="appendPin('1')">1</button>
@@ -260,8 +256,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       solenoidPulseMs: 800,
       batteryV: 8.85,
       deviceMac: '--:--:--:--:--:--',
-      rescuePin: '',
-      isRescueVisible: false,
       users: [],
       logs: [],
       modalPin: ''
@@ -272,7 +266,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       toast.innerText = msg;
       toast.style.borderColor = isError ? 'var(--accent-danger)' : 'var(--accent-success)';
       toast.style.display = 'block';
-      setTimeout(() => { toast.style.display = 'none'; }, 3200);
+      setTimeout(() => { toast.style.display = 'none'; }, 3400);
     }
 
     function switchTab(t) {
@@ -289,22 +283,17 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     function backspacePin() { state.modalPin = state.modalPin.slice(0, -1); updatePinDisplay(); }
     function updatePinDisplay() { document.getElementById('modalPinDisplay').innerText = state.modalPin ? '•'.repeat(state.modalPin.length) : '••••'; }
 
-    function toggleRescueVisibility() {
-      state.isRescueVisible = !state.isRescueVisible;
-      document.getElementById('rescuePinDisplay').innerText = state.isRescueVisible ? state.rescuePin : '••••••';
-    }
-
-    async function submitUnlockPin() {
-      if (state.modalPin.length < 4) { showToast('Digite pelo menos 4 dígitos!', true); return; }
-      const pin = state.modalPin;
-      closeAuthModal();
+    async function submitUnlockPin(customPin = null) {
+      const pinToSend = customPin || state.modalPin;
+      if (!pinToSend || pinToSend.length < 4) { showToast('Digite pelo menos 4 dígitos!', true); return; }
+      if (!customPin) closeAuthModal();
 
       const btn = document.getElementById('btnUnlock');
       btn.disabled = true;
       btn.innerHTML = '<span>⏳ VERIFICANDO...</span>';
 
       try {
-        const res = await fetch(`/api/unlock?pin=${encodeURIComponent(pin)}`, { method: 'POST' });
+        const res = await fetch(`/api/unlock?pin=${encodeURIComponent(pinToSend)}`, { method: 'POST' });
         const data = await res.json();
 
         if (res.ok && data.status === 'ok') {
@@ -386,19 +375,24 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       }
     }
 
-    async function handleEmergencyReset() {
-      const rescuePin = document.getElementById('inputResetRescuePin').value.trim();
-      if (!rescuePin) { showToast('Digite a Chave de Resgate!', true); return; }
-      if (!confirm('Deseja restaurar a Senha Mestre para o padrão de fábrica (123456)?')) return;
+    function handleEmergencyUnlockAction() {
+      const pin = document.getElementById('inputRescueActionPin').value.trim();
+      if (!pin) { showToast('Digite a Chave Mestre de Resgate!', true); return; }
+      submitUnlockPin(pin);
+    }
 
-      const res = await fetch(`/api/emergency_reset?rescuePin=${encodeURIComponent(rescuePin)}`, { method: 'POST' });
+    async function handleEmergencyResetAction() {
+      const pin = document.getElementById('inputRescueActionPin').value.trim();
+      if (!pin) { showToast('Digite a Chave Mestre de Resgate!', true); return; }
+      if (!confirm('Deseja restaurar a Senha Mestre para 123456?')) return;
+
+      const res = await fetch(`/api/emergency_reset?rescuePin=${encodeURIComponent(pin)}`, { method: 'POST' });
       const data = await res.json();
       if (res.ok && data.status === 'ok') {
         showToast(data.message);
-        document.getElementById('inputResetRescuePin').value = '';
         loadStatus();
       } else {
-        showToast(data.message || 'Chave de Resgate inválida!', true);
+        showToast(data.message || 'Chave de Resgate incorreta!', true);
       }
     }
 
@@ -424,7 +418,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
           state.batteryV = res.batteryV;
           state.solenoidPulseMs = res.pulseMs;
           state.deviceMac = res.deviceMac || '--:--:--:--:--:--';
-          state.rescuePin = res.rescuePinSample || '000000';
           state.users = res.users || [];
           state.logs = res.logs || [];
           document.getElementById('batVoltage').innerText = res.batteryV.toFixed(1) + ' V';

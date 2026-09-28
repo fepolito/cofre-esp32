@@ -11,12 +11,11 @@ define('SECRET_SALT', 'COFRE_POLITO_SECURE_2026');
 function calculateEmergencyCode($mac) {
     $cleanMac = strtoupper(str_replace([':', '-'], '', $mac));
     $hash = hash('sha256', $cleanMac . SECRET_SALT);
-    // Extrai 6 dígitos numéricos determinísticos
     $num = hexdec(substr($hash, 0, 8));
     return str_pad($num % 1000000, 6, '0', STR_PAD_LEFT);
 }
 
-// MAC Simulado do ESP32-C3 para o ambiente de testes
+// MAC Simulado do ESP32-C3
 $simulatedMac = '7C:DF:A1:34:B8:2E';
 $calculatedRescuePin = calculateEmergencyCode($simulatedMac);
 
@@ -29,7 +28,6 @@ if (!file_exists($dataFile)) {
         'batteryV' => 8.85,
         'sleepTimeout' => 180,
         'deviceMac' => $simulatedMac,
-        'emergencyPin' => $calculatedRescuePin, // PIN mestre de emergência derivado do MAC
         'users' => [
             [
                 'id' => 1,
@@ -52,7 +50,7 @@ if (!file_exists($dataFile)) {
                 'time' => date('d/m H:i:s'),
                 'user' => 'Sistema',
                 'method' => 'Sistema',
-                'action' => 'Inicialização do Cofre (Chave MAC Ativa)',
+                'action' => 'Inicialização do Cofre (Chave MAC Segura)',
                 'success' => true
             ]
         ]
@@ -78,6 +76,7 @@ switch ($action) {
             ];
         }, $state['users']);
 
+        // IMPORTANTE: Por segurança, NUNCA expor a chave de resgate na API!
         echo json_encode([
             'status' => 'ok',
             'isConfigured' => true,
@@ -86,8 +85,6 @@ switch ($action) {
             'pulseMs' => $state['solenoidPulseMs'],
             'sleepTimeout' => $state['sleepTimeout'],
             'deviceMac' => $state['deviceMac'] ?? $simulatedMac,
-            // O PIN de emergência calculado é exposto aqui para fins didáticos/demonstração na bancada
-            'rescuePinSample' => $calculatedRescuePin,
             'users' => $sanitizedUsers,
             'logs' => array_slice(array_reverse($state['logs']), 0, 15)
         ]);
@@ -101,7 +98,7 @@ switch ($action) {
             exit;
         }
 
-        // Verifica se é o PIN de Emergência derivado do MAC
+        // Validação da Chave Mestre de Resgate (MAC Token)
         if ($pin === $calculatedRescuePin) {
             $state['logs'][] = [
                 'id' => count($state['logs']) + 1,
@@ -123,7 +120,7 @@ switch ($action) {
             exit;
         }
 
-        // Procura entre os usuários comuns
+        // Validação de usuários comuns
         $matchedUser = null;
         foreach ($state['users'] as $user) {
             if ($user['pin'] === $pin) {
@@ -145,6 +142,7 @@ switch ($action) {
 
             echo json_encode([
                 'status' => 'ok',
+                'isRescue' => false,
                 'message' => 'Autenticado com sucesso! Destravando cofre...',
                 'userName' => $matchedUser['name'],
                 'duration' => $state['solenoidPulseMs']
@@ -166,15 +164,13 @@ switch ($action) {
         break;
 
     case 'emergency_reset':
-        // Restaura a senha mestre para o padrão de fábrica se a chave MAC for confirmada
         $rescuePin = $_POST['rescuePin'] ?? $_GET['rescuePin'] ?? '';
         if ($rescuePin !== $calculatedRescuePin) {
             http_response_code(403);
-            echo json_encode(['status' => 'error', 'message' => 'Chave de Resgate MAC inválida!']);
+            echo json_encode(['status' => 'error', 'message' => 'Chave de Resgate MAC incorreta! Acesso negado.']);
             exit;
         }
 
-        // Reseta o usuário mestre para 123456
         foreach ($state['users'] as &$u) {
             if ($u['role'] === 'admin') {
                 $u['pin'] = '123456';
@@ -194,7 +190,7 @@ switch ($action) {
 
         echo json_encode([
             'status' => 'ok',
-            'message' => 'Senha Mestre restaurada para o padrão (123456) com sucesso!'
+            'message' => 'Senha Mestre restaurada para 123456 com sucesso!'
         ]);
         break;
 

@@ -530,7 +530,6 @@
       color: var(--text-muted);
     }
 
-    /* Caixa de Chave MAC */
     .rescue-box {
       background: #0b1120;
       border: 1px solid rgba(245, 158, 11, 0.4);
@@ -540,20 +539,6 @@
       text-align: left;
     }
 
-    .rescue-code-display {
-      font-family: monospace;
-      font-size: 1.4rem;
-      color: #fbbf24;
-      font-weight: 700;
-      letter-spacing: 4px;
-      background: #1e293b;
-      padding: 8px 12px;
-      border-radius: 6px;
-      display: inline-block;
-      margin: 6px 0;
-    }
-
-    /* Alerts */
     .toast {
       position: fixed;
       bottom: 20px;
@@ -588,7 +573,7 @@
         <div class="logo-icon">🔒</div>
         <div class="logo-text">
           <h1>Cofre Inteligente</h1>
-          <span id="firmwareVer">ESP32-C3 • Hardware Token Protection</span>
+          <span>ESP32-C3 • Zero-Knowledge Rescue Token</span>
         </div>
       </div>
       <div class="status-badge" id="lockBadge">
@@ -600,7 +585,7 @@
     <!-- Main Card: Destravamento Seguro -->
     <div class="card hero-card">
       <div class="security-note">
-        🛡️ Proteção por Senha + Chave de Resgate MAC
+        🛡️ Proteção por Senha + Chave de Resgate Offline
       </div>
 
       <div class="lock-indicator" id="lockIcon">🔒</div>
@@ -659,7 +644,7 @@
               <input type="password" id="newUserPin" class="form-input" placeholder="Nova senha deste usuário" maxlength="8" pattern="[0-9]*" inputmode="numeric" required>
             </div>
             <div class="form-group">
-              <label>Senha Mestre ou Chave MAC (Autorização)</label>
+              <label>Senha do Mestre (Autorização)</label>
               <input type="password" id="adminAuthPin" class="form-input" placeholder="Senha Mestre ou Chave de Resgate" maxlength="8" required>
             </div>
             <button type="submit" class="btn-secondary btn-primary-action">Cadastrar Acesso</button>
@@ -676,44 +661,43 @@
         <div class="log-list" id="logContainer"></div>
       </div>
 
-      <!-- Tab 3: Resgate por MAC (Perda Total de Senha) -->
+      <!-- Tab 3: Resgate por MAC (Blindado - Zero Knowledge) -->
       <div class="tab-content" id="tab-resgate">
         <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
           <span style="font-size: 24px;">🆘</span>
           <div>
-            <h3 style="font-size: 0.95rem; color: #fbbf24;">Mecanismo de Resgate por MAC</h3>
-            <span style="font-size: 0.72rem; color: var(--text-muted);">Para emergências de perda total de senha</span>
+            <h3 style="font-size: 0.95rem; color: #fbbf24;">Centro de Resgate de Emergência</h3>
+            <span style="font-size: 0.72rem; color: var(--text-muted);">Recuperação de Perda Total de Senhas</span>
           </div>
         </div>
-
-        <p style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.4; margin-bottom: 12px;">
-          Cada placa ESP32-C3 possui um endereço físico de hardware (MAC) exclusivo e imutável. A partir do seu MAC, o sistema calcula uma <b>Chave Mestre de Resgate</b> de 6 dígitos que nunca se perde, mesmo se você esquecer todas as senhas com o cofre trancado!
-        </p>
 
         <div class="rescue-box">
-          <div style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Endereço Físico MAC do ESP32</div>
-          <div style="font-family: monospace; font-size: 1.1rem; color: white; margin: 4px 0 10px;" id="macDisplay">--:--:--:--:--:--</div>
-
-          <div style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Sua Chave Mestre de Resgate (PIN de Emergência)</div>
-          <div>
-            <span class="rescue-code-display" id="rescuePinDisplay">••••••</span>
-            <button onclick="toggleRescueVisibility()" style="background: none; border: 1px solid var(--border-color); color: var(--accent-primary); border-radius: 6px; padding: 6px 10px; font-size: 0.75rem; cursor: pointer; margin-left: 6px;">👁️ Ver Chave</button>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">ID de Hardware (MAC)</span>
+            <span style="font-family: monospace; font-size: 0.85rem; color: white; background: #1e293b; padding: 2px 8px; border-radius: 4px;" id="macDisplay">--:--:--:--:--:--</span>
           </div>
-          <p style="font-size: 0.72rem; color: #fbbf24; margin-top: 6px;">
-            ⚠️ <b>Atenção:</b> Anote esta chave de 6 dígitos fora do cofre! Se você perder a senha mestre, ela permite destravar pelo Web Portal ou digitando diretamente no teclado físico!
+
+          <p style="font-size: 0.78rem; color: #cbd5e1; line-height: 1.4; margin-top: 10px;">
+            🔒 <b>Política de Segurança Rigorosa:</b><br>
+            A Chave Mestre de Resgate <u>NUNCA</u> é transmitida ou exibida neste portal para impedir que pessoas não autorizadas descubram o código ao conectar no Wi-Fi.
+          </p>
+          <p style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.4; margin-top: 6px;">
+            A Chave de Resgate foi gerada com a sua ferramenta offline privada (<code>tools/gerar_chave_resgate.py</code>) a partir do MAC do seu ESP32 e guardada com você fora do cofre.
           </p>
         </div>
 
-        <!-- Botão para Restaurar Senha Mestre de Fábrica via Chave MAC -->
+        <!-- Formulário de Ação de Emergência -->
         <div style="margin-top: 14px; background: #0b1120; padding: 14px; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
-          <h4 style="font-size: 0.85rem; margin-bottom: 8px; color: white;">Restaurar Senha Mestre para o Padrão</h4>
-          <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 10px;">
-            Esqueceu a senha mestre? Digite a Chave de Resgate MAC abaixo para redefinir a Senha Mestre para <b>123456</b>.
-          </p>
+          <h4 style="font-size: 0.85rem; margin-bottom: 8px; color: white;">Executar Resgate com a Chave</h4>
           <div class="form-group">
-            <input type="password" id="inputResetRescuePin" class="form-input" placeholder="Digite a Chave de Resgate (6 dígitos)" maxlength="6" pattern="[0-9]*" inputmode="numeric">
+            <label>Sua Chave Mestre de Resgate (6 dígitos guardada por você)</label>
+            <input type="password" id="inputRescueActionPin" class="form-input" placeholder="Digite a chave de 6 dígitos" maxlength="6" pattern="[0-9]*" inputmode="numeric">
           </div>
-          <button class="btn-secondary btn-warning-action" onclick="handleEmergencyReset()">Restaurar Senha Mestre de Fábrica</button>
+          
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <button class="btn-secondary btn-warning-action" onclick="handleEmergencyUnlockAction()">⚡ Destravar Cofre em Emergência</button>
+            <button class="btn-secondary" style="border-color: #64748b; font-size: 0.8rem;" onclick="handleEmergencyResetAction()">🔄 Redefinir Senha Mestre para 123456</button>
+          </div>
         </div>
       </div>
 
@@ -723,20 +707,14 @@
           <label>Tempo de Retração da Bobina (ms)</label>
           <input type="number" id="pulseTimeInput" class="form-input" value="800" min="300" max="2000" step="100">
         </div>
-        <div class="form-group">
-          <label>Timeout Captive Portal (segundos)</label>
-          <input type="number" id="sleepTimeoutInput" class="form-input" value="180" min="30" max="600">
-        </div>
         <button class="btn-secondary" onclick="handleSaveConfig()" style="margin-bottom: 14px;">Salvar Parâmetros</button>
-
         <hr style="border: none; border-top: 1px solid var(--border-color); margin: 16px 0;">
-
         <button class="btn-secondary btn-danger" onclick="handleSleepNow()">💤 Desligar Wi-Fi e Entrar em Deep Sleep</button>
       </div>
     </div>
 
     <footer>
-      Sistema Retrofit ESP32-C3 • Controle de Acesso e Resgate por Hardware
+      Sistema Retrofit ESP32-C3 • Zero-Knowledge Security Model
     </footer>
   </div>
 
@@ -745,7 +723,7 @@
     <div class="modal-card">
       <div style="font-size: 32px; margin-bottom: 8px;">🔐</div>
       <h3 style="font-size: 1.15rem; color: white;">Autenticação Obrigatória</h3>
-      <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Digite seu PIN de usuário ou Chave de Resgate MAC</p>
+      <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Digite seu PIN de usuário ou Chave de Resgate</p>
 
       <div class="pin-display" id="modalPinDisplay">••••</div>
 
@@ -779,8 +757,6 @@
       solenoidPulseMs: 800,
       batteryV: 8.85,
       deviceMac: '--:--:--:--:--:--',
-      rescuePin: '',
-      isRescueVisible: false,
       users: [],
       logs: [],
       modalPin: ''
@@ -834,20 +810,14 @@
       el.innerText = state.modalPin ? '•'.repeat(state.modalPin.length) : '••••';
     }
 
-    function toggleRescueVisibility() {
-      state.isRescueVisible = !state.isRescueVisible;
-      const el = document.getElementById('rescuePinDisplay');
-      el.innerText = state.isRescueVisible ? state.rescuePin : '••••••';
-    }
-
-    async function submitUnlockPin() {
-      if (state.modalPin.length < 4) {
+    async function submitUnlockPin(customPin = null) {
+      const pinToSend = customPin || state.modalPin;
+      if (!pinToSend || pinToSend.length < 4) {
         showToast('Digite pelo menos 4 dígitos!', true);
         return;
       }
 
-      const pinToSend = state.modalPin;
-      closeAuthModal();
+      if (!customPin) closeAuthModal();
 
       const btn = document.getElementById('btnUnlock');
       const icon = document.getElementById('lockIcon');
@@ -969,26 +939,32 @@
       }
     }
 
-    async function handleEmergencyReset() {
-      const rescuePin = document.getElementById('inputResetRescuePin').value.trim();
-      if (!rescuePin) {
-        showToast('Digite a Chave de Resgate!', true);
+    // Ações da Aba de Resgate
+    function handleEmergencyUnlockAction() {
+      const pin = document.getElementById('inputRescueActionPin').value.trim();
+      if (!pin) {
+        showToast('Digite a Chave Mestre de Resgate!', true);
         return;
       }
+      submitUnlockPin(pin);
+    }
 
-      if (!confirm('Deseja realmente restaurar a Senha Mestre para o padrão de fábrica (123456)?')) {
+    async function handleEmergencyResetAction() {
+      const pin = document.getElementById('inputRescueActionPin').value.trim();
+      if (!pin) {
+        showToast('Digite a Chave Mestre de Resgate!', true);
         return;
       }
+      if (!confirm('Deseja restaurar a Senha Mestre para 123456 usando a Chave de Resgate?')) return;
 
       try {
-        const res = await fetch(`api.php?action=emergency_reset&rescuePin=${encodeURIComponent(rescuePin)}`);
+        const res = await fetch(`api.php?action=emergency_reset&rescuePin=${encodeURIComponent(pin)}`);
         const data = await res.json();
         if (res.ok && data.status === 'ok') {
           showToast(data.message);
-          document.getElementById('inputResetRescuePin').value = '';
           loadStatus();
         } else {
-          showToast(data.message || 'Chave de Resgate inválida!', true);
+          showToast(data.message || 'Chave de Resgate incorreta!', true);
         }
       } catch (e) {
         showToast('Erro de comunicação', true);
@@ -997,18 +973,9 @@
 
     function handleSaveConfig() {
       const p = parseInt(document.getElementById('pulseTimeInput').value);
-      const s = parseInt(document.getElementById('sleepTimeoutInput').value);
-
-      if (isNaN(p) || p < 200 || p > 3000) {
-        showToast('Tempo de pulso inválido (200ms - 3000ms)', true);
-        return;
-      }
-
       state.solenoidPulseMs = p;
-      state.sleepTimeout = s;
       document.getElementById('pulseDisplay').innerHTML = `${p} <span style="font-size: 0.8rem; color: var(--text-muted);">ms</span>`;
-
-      fetch(`api.php?action=config&pulse=${p}&timeout=${s}`);
+      fetch(`api.php?action=config&pulse=${p}`);
       showToast('Parâmetros salvos com sucesso!');
     }
 
@@ -1035,16 +1002,13 @@
         if (res && res.status === 'ok') {
           state.batteryV = res.batteryV;
           state.solenoidPulseMs = res.pulseMs;
-          state.sleepTimeout = res.sleepTimeout;
           state.deviceMac = res.deviceMac || '--:--:--:--:--:--';
-          state.rescuePin = res.rescuePinSample || '000000';
           state.users = res.users || [];
           state.logs = res.logs || [];
 
           document.getElementById('batVoltage').innerHTML = `${res.batteryV} <span style="font-size: 0.8rem; color: var(--text-muted);">V</span>`;
           document.getElementById('pulseDisplay').innerHTML = `${res.pulseMs} <span style="font-size: 0.8rem; color: var(--text-muted);">ms</span>`;
           document.getElementById('pulseTimeInput').value = res.pulseMs;
-          document.getElementById('sleepTimeoutInput').value = res.sleepTimeout;
           document.getElementById('macDisplay').innerText = state.deviceMac;
 
           renderUsers();

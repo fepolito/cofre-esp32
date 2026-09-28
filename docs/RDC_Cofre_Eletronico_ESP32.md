@@ -117,13 +117,11 @@ Existem dois padrões construtivos comuns em placas de teclado de cofres residen
   * 3 tentativas consecutivas de senha incorreta geram bloqueio temporário de 1 minuto.
   * 5 tentativas incorretas geram bloqueio de 5 minutos com bips de alarme.
 * **RF10 - Botão Físico de Reset/Programação Interno:** Microswitch localizado no interior do cofre para restauração da senha de fábrica caso a Senha Mestre seja esquecida (disponível somente com o cofre fisicamente aberto).
-* **RF11 - Mecanismo de Resgate por Chave de Hardware (MAC Token Rescue):**
-  * Para o cenário crítico de perda total da Senha Mestre com o cofre **fechado e trancado** (impossibilitando o acesso ao botão interno de reset), o sistema implementa um algoritmo determinístico que calcula uma **Chave Mestre de Resgate de 6 dígitos** baseada no endereço MAC físico de fábrica do ESP32 combinado com um salt criptográfico privado (`SHA-256 / Seed`).
-  * Esta Chave de Resgate é exclusiva e imutável de cada chip ESP32.
-  * Pode ser utilizada a qualquer momento tanto no **Teclado Físico** quanto no **Portal Web** para:
-    1. Destravar a bobina imediatamente em situação de emergência.
-    2. Restaurar a Senha Mestre para o padrão de fábrica (`123456`).
-  * Todo acionamento por Chave de Resgate gera um evento de alta prioridade (`🚨 DESTRAVAMENTO DE EMERGÊNCIA POR CHAVE MAC`) no log de auditoria permanente.
+* **RF11 - Mecanismo de Resgate por Chave de Hardware (Zero-Knowledge MAC Token):**
+  * Para o cenário crítico de perda total da Senha Mestre com o cofre **fechado e trancado**, o sistema implementa um algoritmo determinístico que calcula uma **Chave Mestre de Resgate de 6 dígitos** baseada no endereço MAC físico de fábrica do ESP32 combinado com um salt criptográfico privado (`SHA-256 / Seed`).
+  * **Blindagem do Captive Portal (Zero-Knowledge):** O Portal Web e as APIs REST do ESP32 **NUNCA exibem nem transmitem a Chave de Resgate na rede**, impedindo que qualquer pessoa que se conecte ao Wi-Fi descubra o código.
+  * O proprietário gera sua chave offline em seu computador utilizando o script seguro (`tools/gerar_chave_resgate.py`) e a guarda fisicamente fora do cofre.
+  * O portal e o teclado físico apenas aceitam a chave para autenticação e destravamento de emergência, registrando o evento no log de auditoria permanente (`🚨 DESTRAVAMENTO DE EMERGÊNCIA POR CHAVE MAC`).
 
 ---
 

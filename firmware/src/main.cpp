@@ -186,7 +186,6 @@ void handleApiStatus() {
   json += "\"pulseMs\":" + String(solenoidPulseMs) + ",";
   json += "\"batteryV\":8.8,";
   json += "\"deviceMac\":\"" + deviceMac + "\",";
-  json += "\"rescuePinSample\":\"" + emergencyRescuePin + "\",";
 
   json += "\"users\":[";
   for (int i = 0; i < userCount; i++) {
