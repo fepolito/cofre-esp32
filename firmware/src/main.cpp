@@ -184,6 +184,7 @@ void handleApiStatus() {
   String json = "{";
   json += "\"status\":\"ok\",";
   json += "\"pulseMs\":" + String(solenoidPulseMs) + ",";
+  json += "\"sleepTimeout\":" + String(portalTimeoutS) + ",";
   json += "\"batteryV\":8.8,";
   json += "\"deviceMac\":\"" + deviceMac + "\",";
 
@@ -282,6 +283,10 @@ void handleApiConfig() {
   if (server.hasArg("pulse")) {
     solenoidPulseMs = server.arg("pulse").toInt();
     prefs.putUShort("pulse", solenoidPulseMs);
+  }
+  if (server.hasArg("timeout")) {
+    portalTimeoutS = server.arg("timeout").toInt();
+    prefs.putUShort("timeout", portalTimeoutS);
   }
   server.send(200, "application/json", "{\"status\":\"ok\"}");
 }

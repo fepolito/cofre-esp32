@@ -214,6 +214,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
           <label>Tempo de Retração da Bobina (ms)</label>
           <input type="number" id="pulseTimeInput" class="form-input" value="800" min="300" max="2000" step="100">
         </div>
+        <div class="form-group">
+          <label>Timeout do Captive Portal (segundos de inatividade)</label>
+          <input type="number" id="sleepTimeoutInput" class="form-input" value="180" min="30" max="600" step="10">
+          <span style="font-size: 0.72rem; color: var(--text-muted); margin-top: 2px;">
+            Tempo sem atividade antes de desligar o Wi-Fi e retornar ao Deep Sleep para economizar bateria.
+          </span>
+        </div>
         <button class="btn-secondary" onclick="handleSaveConfig()" style="margin-bottom: 14px;">Salvar Parâmetros</button>
         <hr style="border: none; border-top: 1px solid var(--border-color); margin: 16px 0;">
         <button class="btn-secondary btn-danger" onclick="handleSleepNow()">💤 Desligar Wi-Fi e Entrar em Deep Sleep</button>
@@ -255,6 +262,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       isLocked: true,
       solenoidPulseMs: 800,
       batteryV: 8.85,
+      sleepTimeout: 180,
       deviceMac: '--:--:--:--:--:--',
       users: [],
       logs: [],
@@ -398,8 +406,20 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
     function handleSaveConfig() {
       const p = parseInt(document.getElementById('pulseTimeInput').value);
+      const t = parseInt(document.getElementById('sleepTimeoutInput').value);
+
+      if (isNaN(p) || p < 200 || p > 3000) {
+        showToast('Tempo de pulso inválido (200ms a 3000ms)!', true);
+        return;
+      }
+      if (isNaN(t) || t < 30 || t > 900) {
+        showToast('Timeout inválido (30s a 900s)!', true);
+        return;
+      }
+
       state.solenoidPulseMs = p;
-      fetch(`/api/config?pulse=${p}`, { method: 'POST' });
+      state.sleepTimeout = t;
+      fetch(`/api/config?pulse=${p}&timeout=${t}`, { method: 'POST' });
       document.getElementById('pulseDisplay').innerText = p + ' ms';
       showToast('Configurações salvas!');
     }
@@ -417,12 +437,16 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         if (res && res.status === 'ok') {
           state.batteryV = res.batteryV;
           state.solenoidPulseMs = res.pulseMs;
+          state.sleepTimeout = res.sleepTimeout || 180;
           state.deviceMac = res.deviceMac || '--:--:--:--:--:--';
           state.users = res.users || [];
           state.logs = res.logs || [];
           document.getElementById('batVoltage').innerText = res.batteryV.toFixed(1) + ' V';
           document.getElementById('pulseDisplay').innerText = res.pulseMs + ' ms';
           document.getElementById('pulseTimeInput').value = res.pulseMs;
+          if (document.getElementById('sleepTimeoutInput')) {
+            document.getElementById('sleepTimeoutInput').value = state.sleepTimeout;
+          }
           document.getElementById('macDisplay').innerText = state.deviceMac;
           renderUsers();
           renderLogs();

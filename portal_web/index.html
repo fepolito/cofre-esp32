@@ -707,6 +707,13 @@
           <label>Tempo de Retração da Bobina (ms)</label>
           <input type="number" id="pulseTimeInput" class="form-input" value="800" min="300" max="2000" step="100">
         </div>
+        <div class="form-group">
+          <label>Timeout do Captive Portal (segundos de inatividade)</label>
+          <input type="number" id="sleepTimeoutInput" class="form-input" value="180" min="30" max="600" step="10">
+          <span style="font-size: 0.72rem; color: var(--text-muted); margin-top: 2px;">
+            Tempo sem atividade antes de desligar o Wi-Fi e retornar ao Deep Sleep para economizar bateria.
+          </span>
+        </div>
         <button class="btn-secondary" onclick="handleSaveConfig()" style="margin-bottom: 14px;">Salvar Parâmetros</button>
         <hr style="border: none; border-top: 1px solid var(--border-color); margin: 16px 0;">
         <button class="btn-secondary btn-danger" onclick="handleSleepNow()">💤 Desligar Wi-Fi e Entrar em Deep Sleep</button>
@@ -973,9 +980,21 @@
 
     function handleSaveConfig() {
       const p = parseInt(document.getElementById('pulseTimeInput').value);
+      const t = parseInt(document.getElementById('sleepTimeoutInput').value);
+
+      if (isNaN(p) || p < 200 || p > 3000) {
+        showToast('Tempo de retração da bobina inválido (200ms a 3000ms)!', true);
+        return;
+      }
+      if (isNaN(t) || t < 30 || t > 900) {
+        showToast('Timeout de captive inválido (30s a 900s)!', true);
+        return;
+      }
+
       state.solenoidPulseMs = p;
+      state.sleepTimeout = t;
       document.getElementById('pulseDisplay').innerHTML = `${p} <span style="font-size: 0.8rem; color: var(--text-muted);">ms</span>`;
-      fetch(`api.php?action=config&pulse=${p}`);
+      fetch(`api.php?action=config&pulse=${p}&timeout=${t}`);
       showToast('Parâmetros salvos com sucesso!');
     }
 
@@ -1002,6 +1021,7 @@
         if (res && res.status === 'ok') {
           state.batteryV = res.batteryV;
           state.solenoidPulseMs = res.pulseMs;
+          state.sleepTimeout = res.sleepTimeout || 180;
           state.deviceMac = res.deviceMac || '--:--:--:--:--:--';
           state.users = res.users || [];
           state.logs = res.logs || [];
@@ -1009,6 +1029,9 @@
           document.getElementById('batVoltage').innerHTML = `${res.batteryV} <span style="font-size: 0.8rem; color: var(--text-muted);">V</span>`;
           document.getElementById('pulseDisplay').innerHTML = `${res.pulseMs} <span style="font-size: 0.8rem; color: var(--text-muted);">ms</span>`;
           document.getElementById('pulseTimeInput').value = res.pulseMs;
+          if (document.getElementById('sleepTimeoutInput')) {
+            document.getElementById('sleepTimeoutInput').value = state.sleepTimeout;
+          }
           document.getElementById('macDisplay').innerText = state.deviceMac;
 
           renderUsers();
