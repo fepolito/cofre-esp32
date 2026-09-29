@@ -33,3 +33,9 @@ $RECYCLE.BIN/
 *.log
 secrets.h
 secrets.json
+
+# KiCad temp and history
+*.lck
+*.bak
+*_bak
+.history/
