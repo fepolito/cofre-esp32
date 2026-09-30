@@ -3,9 +3,10 @@
  * @brief Firmware de Controle para Retrofit de Cofre Eletrônico Inteligente
  * @author Fernando Polito
  * @mcu ESP32-C3FH4 (Pro Mini / Super Mini)
- * @features Teclado Matricial 3x4, Deep Sleep RTC Wake-up, Captive Portal,
- *           LEDs Verde/Vermelho, Buzzer PNP compartilhado, Múltiplos Usuários,
- *           Log Auditado e Chave Mestre de Resgate baseada no MAC físico do ESP32
+ * @features Teclado Matricial 3x4, Captive Portal Wi-Fi com Baixa Potência RF (Economia de Bateria),
+ *           Compressão GZIP, Gestão Dinâmica de Senha Mestre, Eliminação de 123456,
+ *           LEDs Verde/Vermelho, Buzzer PNP compartilhado, Múltiplos Usuários em Flash,
+ *           Log Auditado e Chave Mestre de Resgate por MAC.
  */
 
 #include <Arduino.h>
@@ -17,42 +18,28 @@
 #include "web_page.h"
 
 // ============================================================================
-// MAPEAMENTO DE PINAGEM FÍSICA (Baseado na Engenharia Reversa da Placa do Cofre)
+// MAPEAMENTO DE PINAGEM FÍSICA
 // ============================================================================
-// Solenoide da Trava (Aciona Par Darlington Q1/Q2 via R2 500Ω - Pino 10 do CI antigo)
-const uint8_t PIN_SOLENOID   = 7;
+const uint8_t PIN_SOLENOID   = 7;   // Solenoide (Darlington Q1/Q2 via R2 500Ω)
+const uint8_t PIN_LED_GREEN  = 8;   // LED Verde (Active-LOW)
+const uint8_t PIN_LED_RED    = 10;  // LED Vermelho (Active-LOW)
 
-// LEDs de Sinalização (Active-LOW: nível LOW acende)
-const uint8_t PIN_LED_GREEN  = 8;   // LED Verde (VD) - Pino 12 do CI antigo
-const uint8_t PIN_LED_RED    = 10;  // LED Vermelho (VM) - Pino 11 do CI antigo
-
-// Matriz do Teclado Físico (3 Linhas x 4 Colunas = 12 Teclas)
 const byte ROWS = 3;
 const byte COLS = 4;
 
 char keys[ROWS][COLS] = {
-  {'0', '1', '2', '3'},       // Linha 1: Pino 2 do CI antigo (compartilhado c/ Buzzer Q3)
-  {'C', '4', '5', '6'},       // Linha 2: Pino 3 do CI antigo (C = CLEAR)
-  {'P', '7', '8', '9'}        // Linha 3: Pino 9 do CI antigo (P = PROGRAM / ENTER)
+  {'0', '1', '2', '3'},       // Linha 1 (compartilhada c/ Buzzer Q3)
+  {'C', '4', '5', '6'},       // Linha 2 (C = CLEAR)
+  {'P', '7', '8', '9'}        // Linha 3 (P = PROGRAM / ENTER)
 };
 
-// Linhas da Matriz (Saídas de Varredura no ESP32-C3)
-// Linha 1 = GPIO 4 (Pino 2 DIP-16)
-// Linha 2 = GPIO 5 (Pino 3 DIP-16)
-// Linha 3 = GPIO 6 (Pino 9 DIP-16)
 byte rowPins[ROWS] = {4, 5, 6};
-
-// Colunas da Matriz (Entradas com Pull-up interno e RTC Wakeup no ESP32-C3)
-// Coluna 1 = GPIO 0 (Pino 5 DIP-16)
-// Coluna 2 = GPIO 1 (Pino 6 DIP-16)
-// Coluna 3 = GPIO 2 (Pino 7 DIP-16)
-// Coluna 4 = GPIO 3 (Pino 8 DIP-16)
 byte colPins[COLS] = {0, 1, 2, 3};
 
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
 // ============================================================================
-// GESTÃO DE USUÁRIOS E CHAVE DE RESGATE MAC (Zero-Knowledge)
+// GESTÃO DE USUÁRIOS E CHAVE DE RESGATE MAC
 // ============================================================================
 struct SafeUser {
   String name;
@@ -67,7 +54,6 @@ int userCount = 0;
 String deviceMac = "";
 String emergencyRescuePin = "";
 
-// Algoritmo de Derivação da Chave de Resgate por MAC
 String calculateRescuePin(String mac) {
   String cleanMac = "";
   for (unsigned int i = 0; i < mac.length(); i++) {
@@ -121,8 +107,8 @@ WebServer server(80);
 uint16_t solenoidPulseMs = 800;
 uint16_t portalTimeoutS  = 180;
 
-enum AppState { MODE_KEYPAD_ACTIVE, MODE_WIFI_PORTAL, MODE_BLOCKED };
-AppState appState = MODE_KEYPAD_ACTIVE;
+enum AppState { MODE_NORMAL, MODE_BLOCKED };
+AppState appState = MODE_NORMAL;
 
 String inputPinBuffer = "";
 uint8_t failedAttempts = 0;
@@ -130,19 +116,19 @@ unsigned long blockedUntil = 0;
 unsigned long lastActivityTime = 0;
 unsigned long solenoidOffTime = 0;
 bool solenoidActive = false;
+bool wifiActive = true;
 
 // ============================================================================
 // CONTROLE DO BUZZER E LEDS
 // ============================================================================
-// O buzzer é acionado pelo transistor PNP Q3 ligado à Linha 1 (GPIO 4)
-void beep(uint16_t freq, uint16_t durationMs) {
-  unsigned long periodUs = 1000000UL / freq;
-  unsigned long halfPeriodUs = periodUs / 2;
+void soundBuzzer(uint16_t freq, uint16_t durationMs) {
+  if (freq == 0) return;
+  unsigned long halfPeriodUs = 500000UL / freq;
   unsigned long cycles = ((unsigned long)freq * durationMs) / 1000UL;
 
   pinMode(rowPins[0], OUTPUT);
   for (unsigned long i = 0; i < cycles; i++) {
-    digitalWrite(rowPins[0], LOW);  // Liga PNP Q3 (puxa base para LOW)
+    digitalWrite(rowPins[0], LOW);  // Liga PNP Q3
     delayMicroseconds(halfPeriodUs);
     digitalWrite(rowPins[0], HIGH); // Desliga PNP Q3
     delayMicroseconds(halfPeriodUs);
@@ -152,26 +138,26 @@ void beep(uint16_t freq, uint16_t durationMs) {
 
 void beepKey() {
   digitalWrite(PIN_LED_GREEN, LOW);
-  beep(2400, 35);
+  soundBuzzer(2700, 35);
   digitalWrite(PIN_LED_GREEN, HIGH);
 }
 
 void beepSuccess() {
   digitalWrite(PIN_LED_GREEN, LOW);
-  beep(2000, 80);
+  soundBuzzer(2000, 80);
   delay(40);
-  beep(2800, 120);
+  soundBuzzer(2800, 120);
   digitalWrite(PIN_LED_GREEN, HIGH);
 }
 
 void beepRescue() {
   digitalWrite(PIN_LED_GREEN, LOW);
   digitalWrite(PIN_LED_RED, LOW);
-  beep(1800, 150);
+  soundBuzzer(1800, 150);
   delay(50);
-  beep(2400, 150);
+  soundBuzzer(2400, 150);
   delay(50);
-  beep(3200, 250);
+  soundBuzzer(3200, 250);
   digitalWrite(PIN_LED_GREEN, HIGH);
   digitalWrite(PIN_LED_RED, HIGH);
 }
@@ -179,23 +165,23 @@ void beepRescue() {
 void beepError() {
   for (int i = 0; i < 3; i++) {
     digitalWrite(PIN_LED_RED, LOW);
-    beep(800, 120);
+    soundBuzzer(800, 120);
     digitalWrite(PIN_LED_RED, HIGH);
     delay(80);
   }
 }
 
 // ============================================================================
-// ACIONAMENTO DA BOBINA / SOLENOIDE
+// ACIONAMENTO DO SOLENOIDE
 // ============================================================================
 void triggerSolenoid(String authorizedUser, String method, bool isRescue = false) {
-  Serial.printf("[COFRE] Solenoide ATIVADO para %s via %s!\n", authorizedUser.c_str(), method.c_str());
+  Serial.printf("[COFRE] Solenoide ATIVADO para '%s' via %s!\n", authorizedUser.c_str(), method.c_str());
   digitalWrite(PIN_SOLENOID, HIGH);
   digitalWrite(PIN_LED_GREEN, LOW);
   solenoidActive = true;
   solenoidOffTime = millis() + solenoidPulseMs;
 
-  addLog(authorizedUser, method, isRescue ? "🚨 DESTRAVAMENTO DE RESGATE (CHAVE MAC)" : "Abertura autorizada", true);
+  addLog(authorizedUser, method, isRescue ? "Resgate Chave MAC" : "Abertura autorizada", true);
 
   if (isRescue) beepRescue(); else beepSuccess();
 }
@@ -209,21 +195,21 @@ void updateSolenoid() {
 }
 
 // ============================================================================
-// DEEP SLEEP COM WAKEUP RTC POR QUALQUER TECLA
+// DEEP SLEEP (REPOUSO DE BATERIA)
 // ============================================================================
 void enterDeepSleep() {
-  Serial.println("[ENERGIA] Entrando em Deep Sleep (~15uA)...");
+  Serial.println("[ENERGIA] Desligando Wi-Fi e entrando em repouso...");
   digitalWrite(PIN_SOLENOID, LOW);
-  digitalWrite(PIN_LED_GREEN, HIGH); // Apaga LED (Active-LOW)
-  digitalWrite(PIN_LED_RED, HIGH);   // Apaga LED (Active-LOW)
+  digitalWrite(PIN_LED_GREEN, HIGH);
+  digitalWrite(PIN_LED_RED, HIGH);
 
-  // As 3 linhas são aterradas para criar referência LOW
   for (int r = 0; r < ROWS; r++) {
     pinMode(rowPins[r], OUTPUT);
     digitalWrite(rowPins[r], LOW);
+    gpio_hold_en((gpio_num_t)rowPins[r]);
   }
+  gpio_deep_sleep_hold_en();
 
-  // As 4 colunas (GPIOs 0, 1, 2, 3) ficam em Pull-Up e ativam o Wake-up no LOW
   for (int c = 0; c < COLS; c++) {
     pinMode(colPins[c], INPUT_PULLUP);
     esp_deep_sleep_enable_gpio_wakeup(1ULL << colPins[c], ESP_GPIO_WAKEUP_GPIO_LOW);
@@ -236,10 +222,21 @@ void enterDeepSleep() {
 }
 
 // ============================================================================
-// ROTAS DO CAPTIVE PORTAL (RESGATE E CONFIGURAÇÕES)
+// ROTAS REST DO CAPTIVE PORTAL
 // ============================================================================
 void handleRoot() {
-  server.send_P(200, "text/html", INDEX_HTML);
+  lastActivityTime = millis();
+  server.sendHeader("Content-Encoding", "gzip");
+  server.send_P(200, "text/html", (const char*)INDEX_HTML_GZ, INDEX_HTML_GZ_LEN);
+}
+
+void handleNotFound() {
+  if (server.uri().startsWith("/api/")) {
+    server.send(404, "application/json", "{\"status\":\"error\",\"message\":\"Rota inexistente\"}");
+  } else {
+    server.sendHeader("Content-Encoding", "gzip");
+    server.send_P(200, "text/html", (const char*)INDEX_HTML_GZ, INDEX_HTML_GZ_LEN);
+  }
 }
 
 void handleApiStatus() {
@@ -250,6 +247,7 @@ void handleApiStatus() {
   json += "\"sleepTimeout\":" + String(portalTimeoutS) + ",";
   json += "\"batteryV\":9.0,";
   json += "\"deviceMac\":\"" + deviceMac + "\",";
+  json += "\"isDefaultMaster\":" + String(users[0].pin == "123456" ? "true" : "false") + ",";
 
   json += "\"users\":[";
   for (int i = 0; i < userCount; i++) {
@@ -265,8 +263,10 @@ void handleApiStatus() {
     json += "{\"user\":\"" + logs[i].user + "\",";
     json += "\"method\":\"" + logs[i].method + "\",";
     json += "\"action\":\"" + logs[i].action + "\",";
-    json += "\"time\":\"Há " + String((millis() / 1000) - logs[i].timeSec) + "s\",";
-    json += "\"success\":" + String(logs[i].success ? "true" : "false") + "}";
+    json += "\"success\":" + String(logs[i].success ? "true" : "false") + ",";
+    unsigned long s = (millis() / 1000) - logs[i].timeSec;
+    String timeStr = s < 60 ? (String(s) + "s atrás") : (String(s / 60) + "m atrás");
+    json += "\"time\":\"" + timeStr + "\"}";
     if (i > 0) json += ",";
   }
   json += "]}";
@@ -277,37 +277,98 @@ void handleApiStatus() {
 void handleApiUnlock() {
   lastActivityTime = millis();
   String pin = server.arg("pin");
+  pin.trim();
 
-  // 1. Testa se foi usada a Chave de Resgate MAC
-  if (pin == emergencyRescuePin) {
+  Serial.printf("[AUTH WEB] Tentativa com PIN: %s\n", pin.c_str());
+
+  if (pin.length() >= 4 && pin == emergencyRescuePin) {
+    failedAttempts = 0;
     triggerSolenoid("RESCUE (Chave MAC)", "Web Portal", true);
-    server.send(200, "application/json", "{\"status\":\"ok\",\"isRescue\":true,\"userName\":\"Chave de Emergência MAC\"}");
+    server.send(200, "application/json", "{\"status\":\"ok\",\"isRescue\":true,\"message\":\"DESTRAVADO VIA CHAVE DE RESGATE!\"}");
     return;
   }
 
-  // 2. Testa usuários normais
   for (int i = 0; i < userCount; i++) {
-    if (users[i].pin == pin) {
+    if (pin.length() >= 4 && pin == users[i].pin) {
+      failedAttempts = 0;
       triggerSolenoid(users[i].name, "Web Portal", false);
-      server.send(200, "application/json", "{\"status\":\"ok\",\"isRescue\":false,\"userName\":\"" + users[i].name + "\"}");
+      server.send(200, "application/json", "{\"status\":\"ok\",\"isRescue\":false,\"userName\":\"" + users[i].name + "\",\"message\":\"Acesso Liberado!\"}");
       return;
     }
   }
 
+  failedAttempts++;
   addLog("Desconhecido", "Web Portal", "Tentativa de senha incorreta", false);
-  server.send(401, "application/json", "{\"status\":\"error\",\"message\":\"Senha incorreta! Acesso negado.\"}");
   beepError();
+  server.send(401, "application/json", "{\"status\":\"error\",\"message\":\"Senha incorreta! Acesso negado.\"}");
+}
+
+void handleApiChangeMasterPin() {
+  lastActivityTime = millis();
+  String oldPin = server.arg("oldPin");
+  String newPin = server.arg("newPin");
+  oldPin.trim(); newPin.trim();
+
+  if (newPin.length() < 4) {
+    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"O novo PIN deve ter pelo menos 4 digitos!\"}");
+    return;
+  }
+
+  if (oldPin != users[0].pin && oldPin != emergencyRescuePin) {
+    server.send(403, "application/json", "{\"status\":\"error\",\"message\":\"Senha Mestre atual incorreta!\"}");
+    beepError();
+    return;
+  }
+
+  users[0].pin = newPin;
+  prefs.putString("u_pin_0", newPin);
+  addLog(users[0].name, "Web Portal", "Senha Mestre alterada com sucesso", true);
+  Serial.printf("[AUTH] Senha Mestre alterada para: %s (123456 eliminada!)\n", newPin.c_str());
+
+  server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Senha Mestre atualizada com sucesso! Senha 123456 desativada.\"}");
+  beepSuccess();
+}
+
+void handleApiDeleteUser() {
+  lastActivityTime = millis();
+  int id = server.arg("id").toInt();
+  String adminPin = server.arg("adminPin");
+  adminPin.trim();
+
+  if (adminPin != users[0].pin && adminPin != emergencyRescuePin) {
+    server.send(403, "application/json", "{\"status\":\"error\",\"message\":\"Senha Mestre incorreta!\"}");
+    return;
+  }
+
+  int idx = id - 1;
+  if (idx <= 0 || idx >= userCount) {
+    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Usuario invalido ou nao permitido excluir mestre!\"}");
+    return;
+  }
+
+  String deletedName = users[idx].name;
+  for (int i = idx; i < userCount - 1; i++) {
+    users[i] = users[i + 1];
+    prefs.putString(("u_name_" + String(i)).c_str(), users[i].name);
+    prefs.putString(("u_pin_" + String(i)).c_str(), users[i].pin);
+  }
+  userCount--;
+  prefs.putInt("u_cnt", userCount);
+
+  addLog("Admin", "Web Portal", "Usuario excluido: " + deletedName, true);
+  server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Usuario excluido com sucesso!\"}");
 }
 
 void handleApiEmergencyReset() {
   lastActivityTime = millis();
   String rescuePin = server.arg("rescuePin");
+  rescuePin.trim();
 
   if (rescuePin == emergencyRescuePin) {
     users[0].pin = "123456";
     prefs.putString("u_pin_0", "123456");
     addLog("RESCUE (Chave MAC)", "Web Portal", "Senha Mestre restaurada para 123456", true);
-    server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Senha Mestre restaurada para 123456 com sucesso!\"}");
+    server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Senha Mestre restaurada para 123456!\"}");
     beepSuccess();
   } else {
     server.send(403, "application/json", "{\"status\":\"error\",\"message\":\"Chave de Resgate MAC incorreta!\"}");
@@ -320,14 +381,15 @@ void handleApiAddUser() {
   String name     = server.arg("name");
   String pin      = server.arg("pin");
   String adminPin = server.arg("adminPin");
+  name.trim(); pin.trim(); adminPin.trim();
 
   if (adminPin != users[0].pin && adminPin != emergencyRescuePin) {
-    server.send(403, "application/json", "{\"status\":\"error\",\"message\":\"Senha Mestre incorreta!\"}");
+    server.send(403, "application/json", "{\"status\":\"error\",\"message\":\"Senha Mestre incorreta! Não autorizado.\"}");
     return;
   }
 
   if (userCount >= MAX_USERS) {
-    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Limite de usuários atingido!\"}");
+    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Limite máximo de 5 usuários atingido!\"}");
     return;
   }
 
@@ -337,8 +399,8 @@ void handleApiAddUser() {
   prefs.putString(("u_name_" + String(userCount - 1)).c_str(), name);
   prefs.putString(("u_pin_" + String(userCount - 1)).c_str(), pin);
 
-  addLog("Admin", "Web Portal", "Novo usuário cadastrado: " + name, true);
-  server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Usuário cadastrado com sucesso!\"}");
+  addLog("Admin", "Web Portal", "Novo usuário adicional: " + name, true);
+  server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Usuário adicional cadastrado com sucesso!\"}");
 }
 
 void handleApiConfig() {
@@ -351,21 +413,19 @@ void handleApiConfig() {
     portalTimeoutS = server.arg("timeout").toInt();
     prefs.putUShort("timeout", portalTimeoutS);
   }
-  server.send(200, "application/json", "{\"status\":\"ok\"}");
+  server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Configurações salvas!\"}");
 }
 
 void handleApiSleep() {
-  server.send(200, "application/json", "{\"status\":\"ok\"}");
+  server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Entrando em modo repouso...\"}");
   delay(500);
   enterDeepSleep();
 }
 
-void startWiFiCaptivePortal() {
-  Serial.println("[WIFI] Ativando Captive Portal...");
-  appState = MODE_WIFI_PORTAL;
-  lastActivityTime = millis();
-
+void startWiFiPortal() {
+  Serial.println("[WIFI] Ativando rede 'Cofre-Smart-Setup' com RF Power otimizado (5 dBm)...");
   WiFi.mode(WIFI_AP);
+  WiFi.setTxPower(WIFI_POWER_5dBm); // 5dBm reduz pico de corrente em ~60% protegendo a bateria 9V
   WiFi.softAP("Cofre-Smart-Setup");
 
   IPAddress apIP(192, 168, 4, 1);
@@ -374,45 +434,47 @@ void startWiFiCaptivePortal() {
 
   server.on("/", handleRoot);
   server.on("/api/status", handleApiStatus);
-  server.on("/api/unlock", HTTP_POST, handleApiUnlock);
-  server.on("/api/emergency_reset", HTTP_POST, handleApiEmergencyReset);
-  server.on("/api/add_user", HTTP_POST, handleApiAddUser);
-  server.on("/api/config", HTTP_POST, handleApiConfig);
-  server.on("/api/sleep", HTTP_POST, handleApiSleep);
-  server.onNotFound(handleRoot);
+  server.on("/api/unlock", handleApiUnlock);
+  server.on("/api/change_master_pin", handleApiChangeMasterPin);
+  server.on("/api/delete_user", handleApiDeleteUser);
+  server.on("/api/emergency_reset", handleApiEmergencyReset);
+  server.on("/api/add_user", handleApiAddUser);
+  server.on("/api/config", handleApiConfig);
+  server.on("/api/sleep", handleApiSleep);
+  server.onNotFound(handleNotFound);
 
   server.begin();
-  beepSuccess();
+  wifiActive = true;
+  lastActivityTime = millis();
 }
 
 // ============================================================================
-// PROCESSAMENTO DO TECLADO FÍSICO (3x4: 0-9, CLEAR, PROGRAM)
+// TECLADO FÍSICO (3x4)
 // ============================================================================
 void processKey(char key) {
   lastActivityTime = millis();
   beepKey();
 
-  // Tecla 'P' (PROGRAM / ENTER)
-  if (key == 'P' || key == '#') {
-    // Comando para ligar Wi-Fi: "C000" ou "*000" seguido de P/ENTER
-    if (inputPinBuffer == "C000" || inputPinBuffer == "*000" || inputPinBuffer == "000") {
-      startWiFiCaptivePortal();
+  if (key == 'P') {
+    Serial.printf("[TECLADO] Processando Buffer: '%s'\n", inputPinBuffer.c_str());
+
+    if (inputPinBuffer == "000" || inputPinBuffer == "C000") {
+      startWiFiPortal();
+      beepSuccess();
       inputPinBuffer = "";
       return;
     }
 
-    // 1. Testa se digitou a Chave de Resgate MAC
-    if (inputPinBuffer == emergencyRescuePin) {
+    if (inputPinBuffer.length() >= 4 && inputPinBuffer == emergencyRescuePin) {
       failedAttempts = 0;
       triggerSolenoid("RESCUE (Chave MAC)", "Teclado", true);
       inputPinBuffer = "";
       return;
     }
 
-    // 2. Testa usuários normais cadastrados
     bool authenticated = false;
     for (int i = 0; i < userCount; i++) {
-      if (inputPinBuffer == users[i].pin) {
+      if (inputPinBuffer.length() >= 4 && inputPinBuffer == users[i].pin) {
         authenticated = true;
         failedAttempts = 0;
         triggerSolenoid(users[i].name, "Teclado", false);
@@ -421,30 +483,28 @@ void processKey(char key) {
     }
 
     if (!authenticated) {
-      Serial.println("[AUTH] Senha incorreta no teclado!");
+      Serial.println("[AUTH TECLADO] Senha incorreta!");
       failedAttempts++;
-      addLog("Desconhecido", "Teclado", "Tentativa de senha inválida: " + inputPinBuffer, false);
+      addLog("Desconhecido", "Teclado", "Senha inválida: " + inputPinBuffer, false);
       beepError();
 
       if (failedAttempts >= 5) {
         appState = MODE_BLOCKED;
-        blockedUntil = millis() + 300000; // Bloqueio de 5 minutos
+        blockedUntil = millis() + 300000;
       } else if (failedAttempts >= 3) {
         appState = MODE_BLOCKED;
-        blockedUntil = millis() + 60000;  // Bloqueio de 1 minuto
+        blockedUntil = millis() + 60000;
       }
     }
 
     inputPinBuffer = "";
   }
-  // Tecla 'C' (CLEAR / LIMPAR BUFFER)
-  else if (key == 'C' || key == '*') {
+  else if (key == 'C') {
     inputPinBuffer = "";
     digitalWrite(PIN_LED_RED, LOW);
-    beep(1200, 100);
+    soundBuzzer(1200, 60);
     digitalWrite(PIN_LED_RED, HIGH);
   }
-  // Teclas Numéricas (0 a 9)
   else {
     if (inputPinBuffer.length() < 8) {
       inputPinBuffer += key;
@@ -453,40 +513,48 @@ void processKey(char key) {
 }
 
 // ============================================================================
-// INICIALIZAÇÃO (SETUP)
+// SETUP
 // ============================================================================
 void setup() {
+  setCpuFrequencyMhz(80); // Reduz clock de 160MHz para 80MHz (reduz consumo digital pela metade)
+
+  gpio_hold_dis((gpio_num_t)rowPins[0]);
+  gpio_hold_dis((gpio_num_t)rowPins[1]);
+  gpio_hold_dis((gpio_num_t)rowPins[2]);
+  gpio_deep_sleep_hold_dis();
+
   Serial.begin(115200);
   delay(100);
 
-  // Configuração dos Pinos de Saída
+  Serial.println("\n\n==========================================");
+  Serial.println("  COFRE INTELIGENTE ESP32-C3 - PRODUÇÃO");
+  Serial.println("==========================================");
+
   pinMode(PIN_SOLENOID, OUTPUT);
   digitalWrite(PIN_SOLENOID, LOW);
 
   pinMode(PIN_LED_GREEN, OUTPUT);
-  digitalWrite(PIN_LED_GREEN, HIGH); // Apagado (Active-LOW)
+  digitalWrite(PIN_LED_GREEN, HIGH);
 
   pinMode(PIN_LED_RED, OUTPUT);
-  digitalWrite(PIN_LED_RED, HIGH);   // Apagado (Active-LOW)
+  digitalWrite(PIN_LED_RED, HIGH);
 
-  // Lê o endereço físico MAC do ESP32 e calcula a Chave Mestre de Resgate
   deviceMac = WiFi.macAddress();
   emergencyRescuePin = calculateRescuePin(deviceMac);
-  Serial.printf("[HARDWARE] MAC do ESP32: %s | Chave Resgate: %s\n", deviceMac.c_str(), emergencyRescuePin.c_str());
+  Serial.printf("[HARDWARE] MAC: %s | Chave Resgate: %s\n", deviceMac.c_str(), emergencyRescuePin.c_str());
 
-  // Memória Não Volátil (Flash Preferences)
   prefs.begin("cofre", false);
   solenoidPulseMs = prefs.getUShort("pulse", 800);
-  userCount = prefs.getInt("u_cnt", 0);
+  portalTimeoutS  = prefs.getUShort("timeout", 180);
+  userCount       = prefs.getInt("u_cnt", 0);
 
-  // Primeira inicialização de fábrica
   if (userCount == 0) {
     users[0] = {"Fernando (Mestre)", "123456", true};
     userCount = 1;
     prefs.putInt("u_cnt", userCount);
     prefs.putString("u_name_0", users[0].name);
     prefs.putString("u_pin_0", users[0].pin);
-    addLog("Sistema", "Sistema", "Inicialização de Fábrica (Chave MAC Ativa)", true);
+    addLog("Sistema", "Sistema", "Inicialização com PIN temporário 123456", true);
   } else {
     for (int i = 0; i < userCount; i++) {
       users[i].name = prefs.getString(("u_name_" + String(i)).c_str(), "Usuario");
@@ -495,7 +563,42 @@ void setup() {
     }
   }
 
-  Serial.println("[COFRE] Sistema pronto.");
+  // MIGRACAO: Se houver usuario adicional cadastrado e a senha mestre ainda for 123456,
+  // promove o usuario para Mestre e apaga a senha temporaria 123456 para sempre!
+  if (userCount > 1 && users[0].pin == "123456") {
+    users[0].name = users[1].name;
+    users[0].pin  = users[1].pin;
+    users[0].isAdmin = true;
+    for (int i = 1; i < userCount - 1; i++) {
+      users[i] = users[i + 1];
+    }
+    userCount--;
+    prefs.putInt("u_cnt", userCount);
+    prefs.putString("u_name_0", users[0].name);
+    prefs.putString("u_pin_0", users[0].pin);
+    Serial.printf("[MIGRACAO] Senha 123456 ELIMINADA! Mestre atualizado para: %s (PIN: %s)\n", users[0].name.c_str(), users[0].pin.c_str());
+  }
+
+  for (int i = 0; i < userCount; i++) {
+    Serial.printf("[USUARIO %d] %s | PIN: %s | Admin: %d\n", i, users[i].name.c_str(), users[i].pin.c_str(), users[i].isAdmin);
+  }
+
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(PIN_LED_GREEN, LOW);
+    digitalWrite(PIN_LED_RED, HIGH);
+    delay(100);
+    digitalWrite(PIN_LED_GREEN, HIGH);
+    digitalWrite(PIN_LED_RED, LOW);
+    delay(100);
+  }
+  digitalWrite(PIN_LED_GREEN, HIGH);
+  digitalWrite(PIN_LED_RED, HIGH);
+
+  soundBuzzer(2000, 100);
+  delay(80);
+  soundBuzzer(2500, 150);
+
+  startWiFiPortal();
   lastActivityTime = millis();
 }
 
@@ -505,40 +608,34 @@ void setup() {
 void loop() {
   updateSolenoid();
 
-  // Estado de Bloqueio por tentativas erradas
-  if (appState == MODE_BLOCKED) {
-    digitalWrite(PIN_LED_RED, (millis() / 500) % 2 == 0 ? LOW : HIGH); // Pisca LED vermelho
-    if (millis() >= blockedUntil) {
-      digitalWrite(PIN_LED_RED, HIGH);
-      appState = MODE_KEYPAD_ACTIVE;
-      failedAttempts = 0;
-    }
-    delay(50);
-    return;
-  }
-
-  // Estado de Portal Wi-Fi Ativo
-  if (appState == MODE_WIFI_PORTAL) {
-    digitalWrite(PIN_LED_GREEN, (millis() / 500) % 2 == 0 ? LOW : HIGH); // Pisca LED verde
+  if (wifiActive) {
     dnsServer.processNextRequest();
     server.handleClient();
-    if (millis() - lastActivityTime > (portalTimeoutS * 1000UL)) {
-      digitalWrite(PIN_LED_GREEN, HIGH);
-      enterDeepSleep();
+  }
+
+  if (appState == MODE_BLOCKED) {
+    digitalWrite(PIN_LED_RED, (millis() / 500) % 2 == 0 ? LOW : HIGH);
+    if (millis() >= blockedUntil) {
+      digitalWrite(PIN_LED_RED, HIGH);
+      appState = MODE_NORMAL;
+      failedAttempts = 0;
     }
+    delay(30);
     return;
   }
 
-  // Estado Normal de Teclado
   char key = keypad.getKey();
   if (key) {
     processKey(key);
   }
 
-  // Timeout de inatividade do teclado -> Deep Sleep (~15uA)
-  if (!solenoidActive && (millis() - lastActivityTime > 8000)) {
-    enterDeepSleep();
+  static unsigned long lastHeartbeat = 0;
+  if (!solenoidActive && (millis() - lastHeartbeat > 1500)) {
+    lastHeartbeat = millis();
+    digitalWrite(PIN_LED_GREEN, LOW);
+    delay(25);
+    digitalWrite(PIN_LED_GREEN, HIGH);
   }
 
-  delay(20);
+  delay(10);
 }
