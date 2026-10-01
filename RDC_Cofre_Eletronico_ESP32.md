@@ -9,8 +9,8 @@
 | **Autor** | Fernando Polito |
 | **Microcontrolador** | ESP32-C3FH4 (Placa ESP32-C3 Super Mini / Pro Mini) |
 | **Hardware Original** | Placa Cofre SC421630P (Motorola DIP-16) |
-| **Status** | **Versão 2.0 - Engenharia Reversa, Protótipo e Firmware Validados em Bancada** |
-| **Data** | Setembro de 2026 |
+| **Status** | **Versão 2.1 - Validação Completa em Bateria, Buffer de 2200µF, Correções de Teclado e Auditoria Persistente** |
+| **Data** | Outubro de 2026 |
 
 ---
 
@@ -20,14 +20,16 @@ O cofre eletrônico em questão possui mecanismo de travamento acionado por sole
 
 O objetivo do projeto foi realizar o **retrofit completo da eletrônica de controle**, preservando a integridade física do cofre (chassi, furação, solenoide original, LEDs, buzzer e teclado matricial), substituindo o microcontrolador original obsoleto por um **ESP32-C3FH4 Super Mini**.
 
-O novo sistema entrega com sucesso comprovado em bancada:
-1. **Operação Primária Local:** Abertura via teclado físico (12 teclas: 0-9, C, P) com resposta instantânea e bips sonoros.
+O novo sistema entrega com sucesso comprovado em bancada e na bateria:
+1. **Operação Primária Local:** Abertura via teclado físico (12 teclas: 0-9, C, P) com resposta instantânea e bips sonoros sem diafonia (anti-crosstalk).
 2. **Interface de Gestão Sem App (Wi-Fi Captive Portal):** Painel web responsivo (modo escuro) servido diretamente pelo ESP32 via navegador (Android, iOS, PC).
 3. **Segurança Reforçada & Zero-Knowledge:**
    - Senhas personalizadas salvas na memória Flash não-volátil (`Preferences`).
    - Eliminação automática da senha temporária de fábrica (`123456`) após cadastro da senha mestre definitiva.
-   - **Chave Mestre de Resgate por MAC:** Token de 6 dígitos calculado offline exclusivamente para o chip do usuário, permitindo destravamento mesmo com perda total de senhas.
-4. **Gerenciamento de Energia:** Otimização agressiva de RF (+5 dBm), clock reduzido (80 MHz) e compressão GZIP nativa da interface para operação segura com bateria.
+   - **Chave Mestre de Resgate por MAC:** Token de 6 dígitos calculado offline exclusivamente para o chip do usuário (`735569`), permitindo destravamento mesmo com perda total de senhas.
+4. **Gerenciamento de Energia e Estabilidade Elétrica:**
+   - Inclusão do **capacitor eletrolítico de 2200 µF 10V** em paralelo com o barramento de alimentação lógica, sanando integralmente a queda de tensão durante as rajadas de Wi-Fi e o disparo da bobina na bateria de 9V.
+   - Otimização de RF (+5 dBm), clock reduzido (80 MHz) e compressão GZIP nativa da interface para operação segura.
 
 ---
 
@@ -43,16 +45,18 @@ A placa de circuito impresso original do cofre foi inteiramente mapeada e transc
                   (Saída: 5.33V)                       │ (1N4934 Flyback)
                          │                             ▼
                          ├───► [ ESP32-C3 5V ]   [ Driver Darlington ]
-                         │       (LDO 3.3V)         (Q1 / Q2 2N4401)
-                         │                             ▲
-                         ├───► [ LEDs D4/D5 Anodo ]    │ Pino 7
+                         │       │  (LDO 3.3V)      (Q1 / Q2 2N4401)
+                         │       ▼                     ▲
+                         ├───► [ 2200µF Buffer ]       │ Pino 7
+                         │                             │
+                         ├───► [ LEDs D4/D5 Anodo ]    │
                          │                             │
                          └───► [ Buzzer BZ1 / Q3 ] ────┴── [ ESP32-C3 ]
 ```
 
 ### 2.1. O Microcontrolador Original
 * **Identificação:** Motorola `SC421630P` em encapsulamento DIP-16 (microcontrolador dedicado de 8 bits com ROM mascarada).
-* **Solução de Retrofit:** O CI obsoleto foi desolado da placa. Os pontos de solda (ilhas DIP-16) foram aproveitados como pontos de conexão direta com os pinos da placa ESP32-C3 Super Mini.
+* **Solução de Retrofit:** O CI obsoleto foi dessoldado da placa. Os pontos de solda (ilhas DIP-16) foram aproveitados como pontos de conexão direta com os pinos da placa ESP32-C3 Super Mini.
 
 ### 2.2. Driver de Potência da Bobina (Solenoide)
 * **Topologia:** Par Darlington com 2 transistores NPN **2N4401** (`Q1` e `Q2`).
@@ -71,10 +75,10 @@ A placa de circuito impresso original do cofre foi inteiramente mapeada e transc
   * **Linha 3:** Teclas `P` (Program/Enter), `7`, `8`, `9`
 * Todas as chaves táteis conectam diretamente as linhas de varredura às colunas com pull-up interno.
 
-### 2.5. Regulador de Tensão e Capacitor
-* **Regulador:** Seiko Instruments **S-812C** (saída regulada de 5.33V, consumo em repouso de ~2 µA, corrente máxima de saída ~50 mA).
-* **Capacitor de Filtro Original:** `C1` de apenas **3.3 µF**.
-* *Impacto para o ESP32:* Suficiente para operação do teclado em repouso. Para tráfego de rádio Wi-Fi contínuo na bateria, foram implementadas reduções de potência no firmware (+5 dBm) e compressão GZIP, sendo recomendado um capacitor eletrolítico buffer (470 µF a 1000 µF) entre 5V e GND.
+### 2.5. O Gargalo do Regulador S-812C e a Solução do Capacitor Buffer
+* **Regulador Original:** Seiko Instruments **S-812C** (saída regulada de 5.33V, corrente máxima de saída ~50 mA).
+* **Problema Identificado na Bateria:** O ESP32 em transmissão Wi-Fi e acionamento de periféricos consome picos de corrente que superavam a capacidade de 50 mA do regulador original com seu capacitor de fábrica de apenas 3.3 µF (`C1`), causando brownout.
+* **Solução Comprovada em Bancada:** A adição de um **capacitor eletrolítico de 2200 µF 10V** em paralelo com a linha de alimentação de 5V forneceu a capacitância de reservatório necessária para sustentar a transmissão do captive portal e o pulso do solenoide diretamente pela bateria de 9V.
 
 ---
 
@@ -92,7 +96,7 @@ A placa de circuito impresso original do cofre foi inteiramente mapeada e transc
 | **Coluna 2 Matriz** | `GPIO 1` | Pino 6 (Col 2: 1, 4, 7) | Entrada c/ Pull-Up & RTC Wakeup |
 | **Coluna 3 Matriz** | `GPIO 2` | Pino 7 (Col 3: 2, 5, 8) | Entrada c/ Pull-Up & RTC Wakeup |
 | **Coluna 4 Matriz** | `GPIO 3` | Pino 8 (Col 4: 3, 6, 9) | Entrada c/ Pull-Up & RTC Wakeup |
-| **Alimentação VDD** | `5V (VIN)` | Pino 12 VDD (Saída 5.33V do S-812C) | Alimentação da Placa |
+| **Alimentação VDD** | `5V (VIN)` | Pino 12 VDD (Saída 5.33V do S-812C c/ 2200µF) | Alimentação da Placa |
 | **Terra (GND)** | `GND` | Pino 18 GND (Malha Comum) | Referência Comum |
 
 ---
@@ -104,55 +108,38 @@ A placa de circuito impresso original do cofre foi inteiramente mapeada e transc
 * **Framework:** Arduino-ESP32 (Core RISC-V 32-bit)
 * **Bibliotecas Principais:** `WiFi`, `WebServer`, `DNSServer`, `Preferences` (NVS Flash), `Keypad`.
 
-### 4.2. Segurança e Gestão de Senhas
-* **Usuário Mestre:** Criado na primeira execução com senha temporária `123456`.
-* **Expurgo Automático de Fábrica:** Assim que o proprietário cadastra seu usuário definitivo (ex: `Fernando` / `38508104`), o firmware apaga a senha `123456` da Flash. Testes práticos confirmaram a rejeição imediata da senha antiga.
-* **Chave Mestre de Resgate por MAC (Zero-Knowledge):**
-  * MAC gravado no chip: `7C:4F:AD:F4:5A:F4`
-  * Chave de Resgate derivada: **`735569`**
-  * Permite destravar o cofre e restaurar credenciais a qualquer momento pelo teclado ou web portal.
+### 4.2. Correção de Diafonia do Teclado (Anti-Crosstalk)
+* **Problema:** Como a Linha 1 da matriz compartilha a linha com a base do transistor do buzzer (GPIO 4), tocar o buzzer enquanto o usuário mantinha a tecla pressionada injetava o tom de 2,7 kHz diretamente nas colunas, corrompendo a leitura e gerando senhas erradas no buffer.
+* **Solução:** O firmware separa as leituras em `PRESSED` e `RELEASED`. A captura do dígito é feita no `PRESSED` com o circuito em silêncio. O bip de confirmação sonora é emitido apenas no `RELEASED` (quando o contato mecânico já abriu), isolando completamente o áudio da matriz. O tempo de debounce foi ajustado em 40 ms para imunidade a ruídos de RF.
 
-### 4.3. Interface Web Captive Portal Otimizada
-* **Tamanho Otimizado:** Redução de 30.5 KB para **7.2 KB** através de compressão **GZIP** embutida em Flash (`PROGMEM`).
-* **Potência de Rádio:** Configurada em **`WIFI_POWER_5dBm`** (~3.1 mW), garantindo alcance de 5 a 10 metros e poupando a bateria de 9V contra brownouts.
-* **Frequência da CPU:** Clock ajustado em **80 MHz** (-50% consumo digital).
-* **Rotas REST Implementadas:**
-  * `GET /` -> Interface Web completa (GZIP).
-  * `GET /api/status` -> Diagnóstico, usuários, logs e status da senha mestre.
-  * `POST /api/unlock` -> Autenticação e retração da bobina.
-  * `POST /api/change_master_pin` -> Atualização instantânea da Senha Mestre.
-  * `POST /api/add_user` -> Inclusão de usuários adicionais.
-  * `POST /api/delete_user` -> Remoção de acessos secundários.
-  * `POST /api/config` -> Calibração do tempo de pulso da bobina (200ms a 3000ms).
-  * `POST /api/emergency_reset` -> Restauração de emergência com a Chave MAC.
-  * `POST /api/sleep` -> Transição manual para modo repouso.
+### 4.3. Histórico de Auditoria Persistente em Flash (`Preferences`)
+* Os eventos de abertura, tentativas e alterações administrativas são gravados em namespace não-volátil (`cofre_logs`).
+* O histórico é recarregado automaticamente na inicialização ou ao despertar do sono profundo, eliminando o problema de perda de logs.
+
+### 4.4. Gestão Dinâmica do Administrador Mestre
+* Possibilidade de renomear e redefinir a senha do Administrador Mestre diretamente no portal Web via `/api/change_master`.
+* Eliminação automática do PIN padrão `123456`.
 
 ---
 
-## 5. Validação Prática em Bancada (Resultados Reais)
+## 5. Diretrizes de Autonomia Energética (Deep Sleep e o LED de Power)
 
-Durante os ensaios realizados na bancada com a placa interligada ao cofre, os seguintes eventos foram auditados e validados no log serial:
+### 5.1. Análise do Consumo do LED de Power On-Board
+* A placa ESP32-C3 Super Mini possui um LED vermelho de **Power (PWR)** soldado diretamente entre a linha de 3.3V e o terra (GND) através de um resistor limitador.
+* **Consumo medido:** $\approx 1.2\text{ mA a } 1.5\text{ mA}$ ($1500\ \mu\text{A}$).
+* **Consumo do ESP32-C3 em Deep Sleep:** $\approx 15\ \mu\text{A}$.
+* **Conclusão:** O LED de Power consome **100 vezes mais corrente** que todo o microcontrolador em repouso!
+  * **Com o LED ativo:** Bateria de 9V (500 mAh) dura cerca de **14 dias**.
+  * **Com o LED removido:** Bateria de 9V dura **1 a 2 anos**.
 
-```text
-[TECLADO] Tecla: 3
-[TECLADO] Tecla: 0
-[TECLADO] Tecla: C
-[TECLADO] Tecla: P
-[SOLENOIDE] Disparado!
-[AUTH] Senha Mestre alterada para: 38508104 (123456 eliminada!)
-[AUTH WEB] Tentativa com PIN: 38508104 -> Solenoide ATIVADO!
-[AUTH WEB] Tentativa com PIN: 123456 -> ACESSO RECUSADO (Senha eliminada!)
-```
-
-* **Mapeamento Mecânico:** Retração do solenoide 100% responsiva em pulsos de 800ms.
-* **Teclado:** Mapeamento 3x4 íntegro, todas as 12 teclas operando.
-* **Persistência NVS:** Gravação e leitura em Flash validadas após múltiplos ciclos de reinicialização.
-* **Portal Captive:** Acesso validado por smartphone sem necessidade de aplicativo.
+> **Recomendação Construtiva:** Na montagem final dentro da caixa do cofre, remover ou raspar o pequeno LED vermelho de PWR (ou seu resistor SMD associado) com a ponta do ferro de solda para atingir a autonomia máxima de bateria.
 
 ---
 
-## 6. Próximos Passos e Recomendações Construtivas
+## 6. Histórico de Versões
 
-1. **Capacitor Buffer na Linha de 5V:** Soldar um capacitor eletrolítico de **470 µF a 1000 µF (16V)** entre os pinos `5V` e `GND` do ESP32-C3 Super Mini para absorver com folga qualquer flutuação de rádio Wi-Fi na bateria de 9V.
-2. **Isolamento e Fixação:** Proteger as soldas com fita Kapton / espaguete termorretrátil e fixar a placa Super Mini no compartimento plástico do cofre.
-3. **Ponto de Alimentação de Emergência:** Manter os contatos frontais originais de 9V (ou porta USB) limpos para permitir alimentação externa de socorro caso a bateria interna se esgote após meses de uso.
+| Versão | Data | Principais Entregas |
+| :--- | :--- | :--- |
+| **1.0** | 29/09/2026 | Concepção inicial, levantamento de requisitos e diretrizes de projeto. |
+| **2.0** | 30/09/2026 | Engenharia reversa no KiCad 10, pinagem validada em bancada, firmware REST e expurgo da senha `123456`. |
+| **2.1** | 01/10/2026 | Validação da bateria com capacitor de 2200µF, correção de anti-crosstalk no teclado, logs persistentes na Flash e auditoria de consumo do LED. |

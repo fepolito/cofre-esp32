@@ -3,10 +3,11 @@
  * @brief Firmware de Controle para Retrofit de Cofre Eletrônico Inteligente
  * @author Fernando Polito
  * @mcu ESP32-C3FH4 (Pro Mini / Super Mini)
- * @features Teclado Matricial 3x4, Captive Portal Wi-Fi com Baixa Potência RF (Economia de Bateria),
- *           Compressão GZIP, Gestão Dinâmica de Senha Mestre, Eliminação de 123456,
- *           LEDs Verde/Vermelho, Buzzer PNP compartilhado, Múltiplos Usuários em Flash,
- *           Log Auditado e Chave Mestre de Resgate por MAC.
+ * @features Teclado Matricial 3x4 com Anti-Crosstalk e Debounce de 40ms,
+ *           Histórico Auditado Persistente em Flash (NVS Preferences),
+ *           Gestão Completa de Nome e Senha Mestre,
+ *           Captive Portal Wi-Fi Otimizado (5 dBm, 80 MHz, GZIP),
+ *           LEDs Verde/Vermelho, Buzzer PNP compartilhado e Chave Mestre de Resgate por MAC.
  */
 
 #include <Arduino.h>
@@ -74,7 +75,9 @@ String calculateRescuePin(String mac) {
   return String(buf);
 }
 
-// Log de Auditoria
+// ============================================================================
+// LOG DE AUDITORIA PERSISTENTE EM FLASH (NVS PREFERENCES)
+// ============================================================================
 struct AuditLog {
   String user;
   String method;
@@ -87,20 +90,52 @@ const int MAX_LOGS = 12;
 AuditLog logs[MAX_LOGS];
 int logCount = 0;
 
+Preferences prefs;
+Preferences logPrefs;
+
+void loadAuditLogs() {
+  logPrefs.begin("cofre_logs", false);
+  logCount = logPrefs.getInt("cnt", 0);
+  if (logCount > MAX_LOGS) logCount = MAX_LOGS;
+
+  for (int i = 0; i < logCount; i++) {
+    logs[i].user    = logPrefs.getString(("u_" + String(i)).c_str(), "Sistema");
+    logs[i].method  = logPrefs.getString(("m_" + String(i)).c_str(), "Auto");
+    logs[i].action  = logPrefs.getString(("a_" + String(i)).c_str(), "Evento");
+    logs[i].success = logPrefs.getBool(("s_" + String(i)).c_str(), true);
+    logs[i].timeSec = logPrefs.getULong(("t_" + String(i)).c_str(), 0);
+  }
+  Serial.printf("[LOGS] %d eventos recuperados da Flash permanente.\n", logCount);
+}
+
+void saveSingleLogToFlash(int idx) {
+  logPrefs.putString(("u_" + String(idx)).c_str(), logs[idx].user);
+  logPrefs.putString(("m_" + String(idx)).c_str(), logs[idx].method);
+  logPrefs.putString(("a_" + String(idx)).c_str(), logs[idx].action);
+  logPrefs.putBool(("s_" + String(idx)).c_str(), logs[idx].success);
+  logPrefs.putULong(("t_" + String(idx)).c_str(), logs[idx].timeSec);
+}
+
 void addLog(String user, String method, String action, bool success) {
+  unsigned long nowSec = millis() / 1000;
   if (logCount < MAX_LOGS) {
-    logs[logCount] = {user, method, action, success, millis() / 1000};
+    logs[logCount] = {user, method, action, success, nowSec};
+    saveSingleLogToFlash(logCount);
     logCount++;
+    logPrefs.putInt("cnt", logCount);
   } else {
-    for (int i = 0; i < MAX_LOGS - 1; i++) logs[i] = logs[i + 1];
-    logs[MAX_LOGS - 1] = {user, method, action, success, millis() / 1000};
+    for (int i = 0; i < MAX_LOGS - 1; i++) {
+      logs[i] = logs[i + 1];
+      saveSingleLogToFlash(i);
+    }
+    logs[MAX_LOGS - 1] = {user, method, action, success, nowSec};
+    saveSingleLogToFlash(MAX_LOGS - 1);
   }
 }
 
 // ============================================================================
 // VARIÁVEIS GLOBAIS DE ESTADO
 // ============================================================================
-Preferences prefs;
 DNSServer dnsServer;
 WebServer server(80);
 
@@ -200,8 +235,12 @@ void updateSolenoid() {
 void enterDeepSleep() {
   Serial.println("[ENERGIA] Desligando Wi-Fi e entrando em repouso...");
   digitalWrite(PIN_SOLENOID, LOW);
-  digitalWrite(PIN_LED_GREEN, HIGH);
-  digitalWrite(PIN_LED_RED, HIGH);
+  digitalWrite(PIN_LED_GREEN, HIGH); // Apagado
+  digitalWrite(PIN_LED_RED, HIGH);   // Apagado
+
+  // Fixa estados dos pinos durante o sleep para consumo mínimo
+  gpio_hold_en((gpio_num_t)PIN_LED_GREEN);
+  gpio_hold_en((gpio_num_t)PIN_LED_RED);
 
   for (int r = 0; r < ROWS; r++) {
     pinMode(rowPins[r], OUTPUT);
@@ -303,14 +342,15 @@ void handleApiUnlock() {
   server.send(401, "application/json", "{\"status\":\"error\",\"message\":\"Senha incorreta! Acesso negado.\"}");
 }
 
-void handleApiChangeMasterPin() {
+void handleApiChangeMaster() {
   lastActivityTime = millis();
+  String name   = server.arg("name");
   String oldPin = server.arg("oldPin");
   String newPin = server.arg("newPin");
-  oldPin.trim(); newPin.trim();
+  name.trim(); oldPin.trim(); newPin.trim();
 
-  if (newPin.length() < 4) {
-    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"O novo PIN deve ter pelo menos 4 digitos!\"}");
+  if (name.length() == 0) {
+    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"O nome do Mestre não pode ser vazio!\"}");
     return;
   }
 
@@ -320,12 +360,19 @@ void handleApiChangeMasterPin() {
     return;
   }
 
-  users[0].pin = newPin;
-  prefs.putString("u_pin_0", newPin);
-  addLog(users[0].name, "Web Portal", "Senha Mestre alterada com sucesso", true);
-  Serial.printf("[AUTH] Senha Mestre alterada para: %s (123456 eliminada!)\n", newPin.c_str());
+  users[0].name = name;
+  prefs.putString("u_name_0", name);
 
-  server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Senha Mestre atualizada com sucesso! Senha 123456 desativada.\"}");
+  if (newPin.length() >= 4) {
+    users[0].pin = newPin;
+    prefs.putString("u_pin_0", newPin);
+    Serial.printf("[AUTH] Senha Mestre de '%s' atualizada para: %s\n", name.c_str(), newPin.c_str());
+  } else {
+    Serial.printf("[AUTH] Nome do Mestre atualizado para '%s'\n", name.c_str());
+  }
+
+  addLog(users[0].name, "Web Portal", "Dados do Mestre atualizados", true);
+  server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Dados do Administrador Mestre salvos com sucesso!\"}");
   beepSuccess();
 }
 
@@ -425,7 +472,7 @@ void handleApiSleep() {
 void startWiFiPortal() {
   Serial.println("[WIFI] Ativando rede 'Cofre-Smart-Setup' com RF Power otimizado (5 dBm)...");
   WiFi.mode(WIFI_AP);
-  WiFi.setTxPower(WIFI_POWER_5dBm); // 5dBm reduz pico de corrente em ~60% protegendo a bateria 9V
+  WiFi.setTxPower(WIFI_POWER_5dBm);
   WiFi.softAP("Cofre-Smart-Setup");
 
   IPAddress apIP(192, 168, 4, 1);
@@ -435,7 +482,7 @@ void startWiFiPortal() {
   server.on("/", handleRoot);
   server.on("/api/status", handleApiStatus);
   server.on("/api/unlock", handleApiUnlock);
-  server.on("/api/change_master_pin", handleApiChangeMasterPin);
+  server.on("/api/change_master", handleApiChangeMaster);
   server.on("/api/delete_user", handleApiDeleteUser);
   server.on("/api/emergency_reset", handleApiEmergencyReset);
   server.on("/api/add_user", handleApiAddUser);
@@ -449,15 +496,15 @@ void startWiFiPortal() {
 }
 
 // ============================================================================
-// TECLADO FÍSICO (3x4)
+// PROCESSAMENTO DO TECLADO FÍSICO COM ANTI-CROSSTALK
 // ============================================================================
-void processKey(char key) {
+void processKeyPress(char key) {
   lastActivityTime = millis();
-  beepKey();
 
   if (key == 'P') {
-    Serial.printf("[TECLADO] Processando Buffer: '%s'\n", inputPinBuffer.c_str());
+    Serial.printf("[TECLADO] Tecla P pressionada. Buffer: '%s'\n", inputPinBuffer.c_str());
 
+    // Comando para ligar Wi-Fi: "000" ou "C000" seguido de P
     if (inputPinBuffer == "000" || inputPinBuffer == "C000") {
       startWiFiPortal();
       beepSuccess();
@@ -504,10 +551,12 @@ void processKey(char key) {
     digitalWrite(PIN_LED_RED, LOW);
     soundBuzzer(1200, 60);
     digitalWrite(PIN_LED_RED, HIGH);
+    Serial.println("[TECLADO] Buffer limpo (C).");
   }
   else {
     if (inputPinBuffer.length() < 8) {
       inputPinBuffer += key;
+      Serial.printf("[TECLADO] Digito '%c' adicionado. Buffer: '%s'\n", key, inputPinBuffer.c_str());
     }
   }
 }
@@ -516,8 +565,10 @@ void processKey(char key) {
 // SETUP
 // ============================================================================
 void setup() {
-  setCpuFrequencyMhz(80); // Reduz clock de 160MHz para 80MHz (reduz consumo digital pela metade)
+  setCpuFrequencyMhz(80);
 
+  gpio_hold_dis((gpio_num_t)PIN_LED_GREEN);
+  gpio_hold_dis((gpio_num_t)PIN_LED_RED);
   gpio_hold_dis((gpio_num_t)rowPins[0]);
   gpio_hold_dis((gpio_num_t)rowPins[1]);
   gpio_hold_dis((gpio_num_t)rowPins[2]);
@@ -527,7 +578,7 @@ void setup() {
   delay(100);
 
   Serial.println("\n\n==========================================");
-  Serial.println("  COFRE INTELIGENTE ESP32-C3 - PRODUÇÃO");
+  Serial.println("  COFRE INTELIGENTE ESP32-C3 - VERSÃO 4.0");
   Serial.println("==========================================");
 
   pinMode(PIN_SOLENOID, OUTPUT);
@@ -538,6 +589,9 @@ void setup() {
 
   pinMode(PIN_LED_RED, OUTPUT);
   digitalWrite(PIN_LED_RED, HIGH);
+
+  // Configura debounce do teclado para 40ms (rejeita ruídos RF do Wi-Fi)
+  keypad.setDebounceTime(40);
 
   deviceMac = WiFi.macAddress();
   emergencyRescuePin = calculateRescuePin(deviceMac);
@@ -554,7 +608,7 @@ void setup() {
     prefs.putInt("u_cnt", userCount);
     prefs.putString("u_name_0", users[0].name);
     prefs.putString("u_pin_0", users[0].pin);
-    addLog("Sistema", "Sistema", "Inicialização com PIN temporário 123456", true);
+    addLog("Sistema", "Sistema", "Inicialização de Fábrica", true);
   } else {
     for (int i = 0; i < userCount; i++) {
       users[i].name = prefs.getString(("u_name_" + String(i)).c_str(), "Usuario");
@@ -563,21 +617,15 @@ void setup() {
     }
   }
 
-  // MIGRACAO: Se houver usuario adicional cadastrado e a senha mestre ainda for 123456,
-  // promove o usuario para Mestre e apaga a senha temporaria 123456 para sempre!
-  if (userCount > 1 && users[0].pin == "123456") {
-    users[0].name = users[1].name;
-    users[0].pin  = users[1].pin;
-    users[0].isAdmin = true;
-    for (int i = 1; i < userCount - 1; i++) {
-      users[i] = users[i + 1];
-    }
-    userCount--;
-    prefs.putInt("u_cnt", userCount);
+  // Ajuste do Nome do Master se ficou como "Ivone"
+  if (users[0].name == "Ivone") {
+    users[0].name = "Fernando (Mestre)";
     prefs.putString("u_name_0", users[0].name);
-    prefs.putString("u_pin_0", users[0].pin);
-    Serial.printf("[MIGRACAO] Senha 123456 ELIMINADA! Mestre atualizado para: %s (PIN: %s)\n", users[0].name.c_str(), users[0].pin.c_str());
+    Serial.println("[PREFS] Nome do Administrador Mestre restaurado para 'Fernando (Mestre)'.");
   }
+
+  // Carrega histórico auditado da Flash
+  loadAuditLogs();
 
   for (int i = 0; i < userCount; i++) {
     Serial.printf("[USUARIO %d] %s | PIN: %s | Admin: %d\n", i, users[i].name.c_str(), users[i].pin.c_str(), users[i].isAdmin);
@@ -620,22 +668,32 @@ void loop() {
       appState = MODE_NORMAL;
       failedAttempts = 0;
     }
-    delay(30);
     return;
   }
 
-  char key = keypad.getKey();
-  if (key) {
-    processKey(key);
+  // Varredura de Teclas com Separação de Estados PRESSED e RELEASED
+  // Anti-Crosstalk: Bip executado no RELEASE (contatos mecânicos abertos)
+  if (keypad.getKeys()) {
+    for (int i = 0; i < LIST_MAX; i++) {
+      if (keypad.key[i].stateChanged) {
+        char k = keypad.key[i].kchar;
+        if (keypad.key[i].kstate == PRESSED) {
+          processKeyPress(k);
+        } else if (keypad.key[i].kstate == RELEASED) {
+          if (k != 'P' && k != 'C') {
+            beepKey(); // Bip apenas ao soltar a tecla numérica
+          }
+        }
+      }
+    }
   }
 
+  // Heartbeat do LED Verde
   static unsigned long lastHeartbeat = 0;
   if (!solenoidActive && (millis() - lastHeartbeat > 1500)) {
     lastHeartbeat = millis();
     digitalWrite(PIN_LED_GREEN, LOW);
-    delay(25);
+    delay(20);
     digitalWrite(PIN_LED_GREEN, HIGH);
   }
-
-  delay(10);
 }
