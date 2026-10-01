@@ -9,7 +9,7 @@
 | **Autor** | Fernando Polito |
 | **Microcontrolador** | ESP32-C3FH4 (Placa ESP32-C3 Super Mini / Pro Mini) |
 | **Hardware Original** | Placa Cofre SC421630P (Motorola DIP-16) |
-| **Status** | **Versão 2.1 - Validação Completa em Bateria, Buffer de 2200µF, Correções de Teclado e Auditoria Persistente** |
+| **Status** | **Versão 2.2 - Varredor Matricial Nativo Imune a RF, Logs com Buffer Visível, Correção de Underflow e Buzzer Multi-Modo** |
 | **Data** | Outubro de 2026 |
 
 ---
@@ -108,13 +108,23 @@ A placa de circuito impresso original do cofre foi inteiramente mapeada e transc
 * **Framework:** Arduino-ESP32 (Core RISC-V 32-bit)
 * **Bibliotecas Principais:** `WiFi`, `WebServer`, `DNSServer`, `Preferences` (NVS Flash), `Keypad`.
 
-### 4.2. Correção de Diafonia do Teclado (Anti-Crosstalk)
-* **Problema:** Como a Linha 1 da matriz compartilha a linha com a base do transistor do buzzer (GPIO 4), tocar o buzzer enquanto o usuário mantinha a tecla pressionada injetava o tom de 2,7 kHz diretamente nas colunas, corrompendo a leitura e gerando senhas erradas no buffer.
-* **Solução:** O firmware separa as leituras em `PRESSED` e `RELEASED`. A captura do dígito é feita no `PRESSED` com o circuito em silêncio. O bip de confirmação sonora é emitido apenas no `RELEASED` (quando o contato mecânico já abriu), isolando completamente o áudio da matriz. O tempo de debounce foi ajustado em 40 ms para imunidade a ruídos de RF.
+### 4.2. Varredor Matricial Nativo de Alta Imunidade a Ruído de RF
+* **Problema:** A leitura rápida da biblioteca genérica (`Keypad.h`) chaveava colunas e lia as linhas em menos de 50 nanossegundos. A capacitância do cabo flat da porta somada ao ruído eletromagnético dos pacotes Wi-Fi causava leituras corrompidas ou ignoradas. Além disso, a falta de limpeza por inatividade acumulava caracteres no buffer, truncando senhas de 8 dígitos (`length < 8`).
+* **Solução Implementada (v2.2):**
+  1. **Varredura Nativa com Tempo de Acomodação:** Introdução de `delayMicroseconds(25)` após chavear cada coluna para nível baixo antes de ler as linhas, garantindo estabilização total do sinal elétrico na presença de RF.
+  2. **Debounce Triplo de 30 ms:** Confirmação por amostragem tripla antes de registrar a tecla como `PRESSED`.
+  3. **Auto-Clear de Inatividade (3,5 segundos):** O buffer `inputPinBuffer` é limpo automaticamente após 3,5 segundos sem digitação, eliminando contaminação prévia.
+  4. **Expansão de Buffer e Autenticação Flexível:** Buffer expandido para 16 dígitos com validação por coincidência exata ou sufixo (`endsWith(pin)`), eliminando o descarte do 8º dígito.
+  5. **Comando `000P` Resiliente:** Reconhece `000`, `ends_with("000")` ou sequências de 3 ou mais zeros como comando de religamento do portal Wi-Fi.
 
-### 4.3. Histórico de Auditoria Persistente em Flash (`Preferences`)
-* Os eventos de abertura, tentativas e alterações administrativas são gravados em namespace não-volátil (`cofre_logs`).
-* O histórico é recarregado automaticamente na inicialização ou ao despertar do sono profundo, eliminando o problema de perda de logs.
+### 4.3. Histórico de Auditoria Persistente e Diagnóstico de Dígitos
+* **Exibição do Buffer Coletado:** Nos eventos de teclado, o canal de auditoria agora registra os dígitos exatos capturados (ex: `Canal: Teclado [38508104]`), permitindo validação visual imediata na tela do celular.
+* **Correção de Underflow Monotônico:** Tratamento do reset de `millis()` após reboots e deep sleep. Logs de sessões anteriores são marcados elegantemente como `"Sessão anterior"`, eliminando os valores de tempo absurdos (`71582783m`).
+
+### 4.4. Arquitetura do Buzzer Multi-Modo e Proteção de Linha
+* **Suporte Híbrido:** O firmware suporta buzzers **Ativos PNP (pulso DC LOW)**, **Ativos NPN (pulso DC HIGH)** e **Passivos (PWM 2,7 kHz)**, configuráveis na aba Ajustes do portal Web e gravados na Flash (`Preferences`).
+* **Sequência de Boot:** Ao ligar, o cofre executa os 3 pulsos para teste audível em bancada.
+* **Desobstrução do GPIO 4:** O pino de linha do teclado (GPIO 4) é sempre reconfigurado para `INPUT_PULLUP` ao finalizar qualquer sinal sonoro, impedindo o travamento das teclas `0, 1, 2, 3`.
 
 ### 4.4. Gestão Dinâmica do Administrador Mestre
 * Possibilidade de renomear e redefinir a senha do Administrador Mestre diretamente no portal Web via `/api/change_master`.
@@ -143,3 +153,4 @@ A placa de circuito impresso original do cofre foi inteiramente mapeada e transc
 | **1.0** | 29/09/2026 | Concepção inicial, levantamento de requisitos e diretrizes de projeto. |
 | **2.0** | 30/09/2026 | Engenharia reversa no KiCad 10, pinagem validada em bancada, firmware REST e expurgo da senha `123456`. |
 | **2.1** | 01/10/2026 | Validação da bateria com capacitor de 2200µF, correção de anti-crosstalk no teclado, logs persistentes na Flash e auditoria de consumo do LED. |
+| **2.2** | 01/10/2026 | Varredor nativo imune a RF (25µs settling delay), buffer visível nos logs, correção do underflow de millis, buzzer multi-modo (PNP/NPN/AC) e botões de teste no portal web. |

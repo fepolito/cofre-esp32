@@ -3,11 +3,13 @@
  * @brief Firmware de Controle para Retrofit de Cofre Eletrônico Inteligente
  * @author Fernando Polito
  * @mcu ESP32-C3FH4 (Pro Mini / Super Mini)
- * @features Teclado Matricial 3x4 com Anti-Crosstalk e Debounce de 40ms,
- *           Histórico Auditado Persistente em Flash (NVS Preferences),
- *           Gestão Completa de Nome e Senha Mestre,
- *           Captive Portal Wi-Fi Otimizado (5 dBm, 80 MHz, GZIP),
- *           LEDs Verde/Vermelho, Buzzer PNP compartilhado e Chave Mestre de Resgate por MAC.
+ * @features Varredor Matricial Nativo 3x4 com Imunidade RF (25µs settling delay),
+ *           Debounce Triplo de 30ms, Auto-Clear de Inatividade (3.5s),
+ *           Histórico Auditado com Exibição de Dígitos Brutos no Canal,
+ *           Correção de Underflow Monotônico nos Logs ("Sessão anterior"),
+ *           Buzzer Multi-Modo (Ativo PNP DC LOW, Ativo NPN DC HIGH, Passivo AC PWM),
+ *           Sequência de Diagnóstico Sonoro no Boot e Teste via Web,
+ *           Captive Portal Otimizado (+5 dBm RF, 80 MHz, GZIP).
  */
 
 #include <Arduino.h>
@@ -15,7 +17,6 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <Preferences.h>
-#include <Keypad.h>
 #include "web_page.h"
 
 // ============================================================================
@@ -25,19 +26,17 @@ const uint8_t PIN_SOLENOID   = 7;   // Solenoide (Darlington Q1/Q2 via R2 500Ω)
 const uint8_t PIN_LED_GREEN  = 8;   // LED Verde (Active-LOW)
 const uint8_t PIN_LED_RED    = 10;  // LED Vermelho (Active-LOW)
 
-const byte ROWS = 3;
-const byte COLS = 4;
+const uint8_t ROWS = 3;
+const uint8_t COLS = 4;
 
-char keys[ROWS][COLS] = {
-  {'0', '1', '2', '3'},       // Linha 1 (compartilhada c/ Buzzer Q3)
-  {'C', '4', '5', '6'},       // Linha 2 (C = CLEAR)
-  {'P', '7', '8', '9'}        // Linha 3 (P = PROGRAM / ENTER)
+const uint8_t ROW_PINS[ROWS] = {4, 5, 6}; // Linha 1 (Q3/Buzzer), Linha 2, Linha 3
+const uint8_t COL_PINS[COLS] = {0, 1, 2, 3}; // Coluna 1, 2, 3, 4
+
+const char KEY_MAP[ROWS][COLS] = {
+  {'0', '1', '2', '3'}, // Linha 1 (GPIO 4)
+  {'C', '4', '5', '6'}, // Linha 2 (GPIO 5)
+  {'P', '7', '8', '9'}  // Linha 3 (GPIO 6)
 };
-
-byte rowPins[ROWS] = {4, 5, 6};
-byte colPins[COLS] = {0, 1, 2, 3};
-
-Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
 // ============================================================================
 // GESTÃO DE USUÁRIOS E CHAVE DE RESGATE MAC
@@ -141,6 +140,7 @@ WebServer server(80);
 
 uint16_t solenoidPulseMs = 800;
 uint16_t portalTimeoutS  = 180;
+uint8_t  buzzerMode      = 0; // 0 = DC LOW (PNP), 1 = DC HIGH (NPN), 2 = AC Tone (Passivo)
 
 enum AppState { MODE_NORMAL, MODE_BLOCKED };
 AppState appState = MODE_NORMAL;
@@ -149,50 +149,72 @@ String inputPinBuffer = "";
 uint8_t failedAttempts = 0;
 unsigned long blockedUntil = 0;
 unsigned long lastActivityTime = 0;
+unsigned long lastKeyPressTime = 0;
 unsigned long solenoidOffTime = 0;
 bool solenoidActive = false;
 bool wifiActive = true;
 
 // ============================================================================
-// CONTROLE DO BUZZER E LEDS
+// CONTROLE DO BUZZER MULTI-MODO E LEDS
 // ============================================================================
 void soundBuzzer(uint16_t freq, uint16_t durationMs) {
-  if (freq == 0) return;
-  unsigned long halfPeriodUs = 500000UL / freq;
-  unsigned long cycles = ((unsigned long)freq * durationMs) / 1000UL;
+  if (durationMs == 0) return;
 
-  pinMode(rowPins[0], OUTPUT);
-  for (unsigned long i = 0; i < cycles; i++) {
-    digitalWrite(rowPins[0], LOW);  // Liga PNP Q3
-    delayMicroseconds(halfPeriodUs);
-    digitalWrite(rowPins[0], HIGH); // Desliga PNP Q3
-    delayMicroseconds(halfPeriodUs);
+  pinMode(ROW_PINS[0], OUTPUT);
+
+  uint8_t mode = buzzerMode;
+  if (freq == 1) mode = 0;      // Força modo DC LOW (PNP)
+  else if (freq == 2) mode = 1; // Força modo DC HIGH (NPN)
+  else if (freq > 10) mode = 2; // Força modo AC PWM Tone
+
+  if (mode == 0) {
+    // Modo DC LOW: Ativa PNP Q3 (conduz com pino em nível baixo)
+    digitalWrite(ROW_PINS[0], LOW);
+    delay(durationMs);
+  } else if (mode == 1) {
+    // Modo DC HIGH: Ativa NPN (conduz com pino em nível alto)
+    digitalWrite(ROW_PINS[0], HIGH);
+    delay(durationMs);
+  } else {
+    // Modo AC PWM Tone: Buzzer passivo em frequência configurada
+    uint16_t f = (freq > 10) ? freq : 2700;
+    unsigned long halfPeriodUs = 500000UL / f;
+    unsigned long cycles = ((unsigned long)f * durationMs) / 1000UL;
+    for (unsigned long i = 0; i < cycles; i++) {
+      digitalWrite(ROW_PINS[0], LOW);
+      delayMicroseconds(halfPeriodUs);
+      digitalWrite(ROW_PINS[0], HIGH);
+      delayMicroseconds(halfPeriodUs);
+    }
   }
-  digitalWrite(rowPins[0], HIGH);
+
+  // CRUCIAL: Retorna Linha 1 para INPUT_PULLUP ao terminar!
+  // Isso corta o buzzer e desobstrui o pino para ler as teclas '0', '1', '2', '3'!
+  pinMode(ROW_PINS[0], INPUT_PULLUP);
 }
 
 void beepKey() {
   digitalWrite(PIN_LED_GREEN, LOW);
-  soundBuzzer(2700, 35);
+  soundBuzzer(0, 35);
   digitalWrite(PIN_LED_GREEN, HIGH);
 }
 
 void beepSuccess() {
   digitalWrite(PIN_LED_GREEN, LOW);
-  soundBuzzer(2000, 80);
+  soundBuzzer(0, 80);
   delay(40);
-  soundBuzzer(2800, 120);
+  soundBuzzer(0, 120);
   digitalWrite(PIN_LED_GREEN, HIGH);
 }
 
 void beepRescue() {
   digitalWrite(PIN_LED_GREEN, LOW);
   digitalWrite(PIN_LED_RED, LOW);
-  soundBuzzer(1800, 150);
+  soundBuzzer(0, 150);
   delay(50);
-  soundBuzzer(2400, 150);
+  soundBuzzer(0, 150);
   delay(50);
-  soundBuzzer(3200, 250);
+  soundBuzzer(0, 250);
   digitalWrite(PIN_LED_GREEN, HIGH);
   digitalWrite(PIN_LED_RED, HIGH);
 }
@@ -200,7 +222,7 @@ void beepRescue() {
 void beepError() {
   for (int i = 0; i < 3; i++) {
     digitalWrite(PIN_LED_RED, LOW);
-    soundBuzzer(800, 120);
+    soundBuzzer(0, 100);
     digitalWrite(PIN_LED_RED, HIGH);
     delay(80);
   }
@@ -235,23 +257,22 @@ void updateSolenoid() {
 void enterDeepSleep() {
   Serial.println("[ENERGIA] Desligando Wi-Fi e entrando em repouso...");
   digitalWrite(PIN_SOLENOID, LOW);
-  digitalWrite(PIN_LED_GREEN, HIGH); // Apagado
-  digitalWrite(PIN_LED_RED, HIGH);   // Apagado
+  digitalWrite(PIN_LED_GREEN, HIGH);
+  digitalWrite(PIN_LED_RED, HIGH);
 
-  // Fixa estados dos pinos durante o sleep para consumo mínimo
   gpio_hold_en((gpio_num_t)PIN_LED_GREEN);
   gpio_hold_en((gpio_num_t)PIN_LED_RED);
 
   for (int r = 0; r < ROWS; r++) {
-    pinMode(rowPins[r], OUTPUT);
-    digitalWrite(rowPins[r], LOW);
-    gpio_hold_en((gpio_num_t)rowPins[r]);
+    pinMode(ROW_PINS[r], OUTPUT);
+    digitalWrite(ROW_PINS[r], LOW);
+    gpio_hold_en((gpio_num_t)ROW_PINS[r]);
   }
   gpio_deep_sleep_hold_en();
 
   for (int c = 0; c < COLS; c++) {
-    pinMode(colPins[c], INPUT_PULLUP);
-    esp_deep_sleep_enable_gpio_wakeup(1ULL << colPins[c], ESP_GPIO_WAKEUP_GPIO_LOW);
+    pinMode(COL_PINS[c], INPUT_PULLUP);
+    esp_deep_sleep_enable_gpio_wakeup(1ULL << COL_PINS[c], ESP_GPIO_WAKEUP_GPIO_LOW);
   }
 
   WiFi.disconnect(true);
@@ -284,6 +305,7 @@ void handleApiStatus() {
   json += "\"status\":\"ok\",";
   json += "\"pulseMs\":" + String(solenoidPulseMs) + ",";
   json += "\"sleepTimeout\":" + String(portalTimeoutS) + ",";
+  json += "\"buzzerMode\":" + String(buzzerMode) + ",";
   json += "\"batteryV\":9.0,";
   json += "\"deviceMac\":\"" + deviceMac + "\",";
   json += "\"isDefaultMaster\":" + String(users[0].pin == "123456" ? "true" : "false") + ",";
@@ -298,13 +320,22 @@ void handleApiStatus() {
   json += "],";
 
   json += "\"logs\":[";
+  unsigned long currentSec = millis() / 1000;
   for (int i = logCount - 1; i >= 0; i--) {
     json += "{\"user\":\"" + logs[i].user + "\",";
     json += "\"method\":\"" + logs[i].method + "\",";
     json += "\"action\":\"" + logs[i].action + "\",";
     json += "\"success\":" + String(logs[i].success ? "true" : "false") + ",";
-    unsigned long s = (millis() / 1000) - logs[i].timeSec;
-    String timeStr = s < 60 ? (String(s) + "s atrás") : (String(s / 60) + "m atrás");
+
+    // Correção do Underflow Monotônico de 32 bits
+    String timeStr;
+    if (currentSec >= logs[i].timeSec) {
+      unsigned long s = currentSec - logs[i].timeSec;
+      timeStr = s < 60 ? (String(s) + "s atrás") : (String(s / 60) + "m atrás");
+    } else {
+      timeStr = "Sessão anterior";
+    }
+
     json += "\"time\":\"" + timeStr + "\"}";
     if (i > 0) json += ",";
   }
@@ -460,7 +491,29 @@ void handleApiConfig() {
     portalTimeoutS = server.arg("timeout").toInt();
     prefs.putUShort("timeout", portalTimeoutS);
   }
-  server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Configurações salvas!\"}");
+  if (server.hasArg("buzzerMode")) {
+    buzzerMode = server.arg("buzzerMode").toInt();
+    prefs.putUChar("bz_mode", buzzerMode);
+    Serial.printf("[BUZZER] Modo padrao alterado para: %d\n", buzzerMode);
+  }
+  server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Configurações salvas com sucesso!\"}");
+}
+
+void handleApiTestBuzzer() {
+  lastActivityTime = millis();
+  String mode = server.arg("mode");
+  mode.trim(); mode.toLowerCase();
+
+  if (mode == "low") {
+    soundBuzzer(1, 100);
+    server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Pulso DC LOW (100ms) emitido no Buzzer!\"}");
+  } else if (mode == "high") {
+    soundBuzzer(2, 100);
+    server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Pulso DC HIGH (100ms) emitido no Buzzer!\"}");
+  } else {
+    soundBuzzer(2700, 150);
+    server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Tom AC PWM 2.7 kHz (150ms) emitido no Buzzer!\"}");
+  }
 }
 
 void handleApiSleep() {
@@ -487,6 +540,7 @@ void startWiFiPortal() {
   server.on("/api/emergency_reset", handleApiEmergencyReset);
   server.on("/api/add_user", handleApiAddUser);
   server.on("/api/config", handleApiConfig);
+  server.on("/api/test_buzzer", handleApiTestBuzzer);
   server.on("/api/sleep", handleApiSleep);
   server.onNotFound(handleNotFound);
 
@@ -496,43 +550,58 @@ void startWiFiPortal() {
 }
 
 // ============================================================================
-// PROCESSAMENTO DO TECLADO FÍSICO COM ANTI-CROSSTALK
+// PROCESSAMENTO DO TECLADO FÍSICO COM BUFFER VISÍVEL E AUTO-CLEAR
 // ============================================================================
 void processKeyPress(char key) {
   lastActivityTime = millis();
+  lastKeyPressTime = millis();
 
   if (key == 'P') {
     Serial.printf("[TECLADO] Tecla P pressionada. Buffer: '%s'\n", inputPinBuffer.c_str());
 
-    // Comando para ligar Wi-Fi: "000" ou "C000" seguido de P
-    if (inputPinBuffer == "000" || inputPinBuffer == "C000") {
+    String rawBuffer = inputPinBuffer;
+    String channelStr = "Teclado [" + (rawBuffer.length() > 0 ? rawBuffer : "vazio") + "]";
+
+    // Comando para ligar Wi-Fi: "000" ou termina com "000" ou apenas zeros (>= 3)
+    bool isWebCode = (rawBuffer == "000" || rawBuffer.endsWith("000") || rawBuffer == "C000");
+    if (!isWebCode && rawBuffer.length() >= 3) {
+      isWebCode = true;
+      for (size_t i = 0; i < rawBuffer.length(); i++) {
+        if (rawBuffer[i] != '0') { isWebCode = false; break; }
+      }
+    }
+
+    if (isWebCode) {
       startWiFiPortal();
+      addLog("Sistema", channelStr, "Wi-Fi Ativado via Teclado (000P)", true);
       beepSuccess();
       inputPinBuffer = "";
       return;
     }
 
-    if (inputPinBuffer.length() >= 4 && inputPinBuffer == emergencyRescuePin) {
+    // Chave de Resgate MAC
+    if (rawBuffer.length() >= 4 && (rawBuffer == emergencyRescuePin || rawBuffer.endsWith(emergencyRescuePin))) {
       failedAttempts = 0;
-      triggerSolenoid("RESCUE (Chave MAC)", "Teclado", true);
+      triggerSolenoid("RESCUE (Chave MAC)", channelStr, true);
       inputPinBuffer = "";
       return;
     }
 
+    // Usuários cadastrados (Mestre ou Adicionais)
     bool authenticated = false;
     for (int i = 0; i < userCount; i++) {
-      if (inputPinBuffer.length() >= 4 && inputPinBuffer == users[i].pin) {
+      if (users[i].pin.length() >= 4 && (rawBuffer == users[i].pin || rawBuffer.endsWith(users[i].pin))) {
         authenticated = true;
         failedAttempts = 0;
-        triggerSolenoid(users[i].name, "Teclado", false);
+        triggerSolenoid(users[i].name, channelStr, false);
         break;
       }
     }
 
     if (!authenticated) {
-      Serial.println("[AUTH TECLADO] Senha incorreta!");
+      Serial.printf("[AUTH TECLADO] Senha incorreta! Buffer: '%s'\n", rawBuffer.c_str());
       failedAttempts++;
-      addLog("Desconhecido", "Teclado", "Senha inválida: " + inputPinBuffer, false);
+      addLog("Desconhecido", channelStr, "Senha incorreta: [" + rawBuffer + "]", false);
       beepError();
 
       if (failedAttempts >= 5) {
@@ -549,15 +618,78 @@ void processKeyPress(char key) {
   else if (key == 'C') {
     inputPinBuffer = "";
     digitalWrite(PIN_LED_RED, LOW);
-    soundBuzzer(1200, 60);
+    soundBuzzer(0, 60);
     digitalWrite(PIN_LED_RED, HIGH);
-    Serial.println("[TECLADO] Buffer limpo (C).");
+    Serial.println("[TECLADO] Buffer limpo manualmente (C).");
   }
   else {
-    if (inputPinBuffer.length() < 8) {
+    // Permite buffer de até 16 dígitos para não truncar senhas de 8 dígitos caso haja ruído anterior
+    if (inputPinBuffer.length() < 16) {
       inputPinBuffer += key;
-      Serial.printf("[TECLADO] Digito '%c' adicionado. Buffer: '%s'\n", key, inputPinBuffer.c_str());
+      Serial.printf("[TECLADO] Digito '%c' capturado. Buffer: '%s'\n", key, inputPinBuffer.c_str());
     }
+  }
+}
+
+// ============================================================================
+// VARREDOR MATRICIAL NATIVO DE ALTA IMUNIDADE A RUÍDO RF (TEMPO DE ACOMODAÇÃO)
+// ============================================================================
+char scanRawKey() {
+  for (int r = 0; r < ROWS; r++) {
+    pinMode(ROW_PINS[r], INPUT_PULLUP);
+  }
+  char pressed = 0;
+  for (int c = 0; c < COLS; c++) {
+    pinMode(COL_PINS[c], OUTPUT);
+    digitalWrite(COL_PINS[c], LOW);
+    delayMicroseconds(25); // 25µs de acomodação para o cabo da porta e ruído RF
+    for (int r = 0; r < ROWS; r++) {
+      if (digitalRead(ROW_PINS[r]) == LOW) {
+        pressed = KEY_MAP[r][c];
+      }
+    }
+    digitalWrite(COL_PINS[c], HIGH);
+    pinMode(COL_PINS[c], INPUT_PULLUP);
+    if (pressed != 0) break;
+  }
+  return pressed;
+}
+
+void updateKeypad() {
+  static char lastRawKey = 0;
+  static char confirmedKey = 0;
+  static unsigned long lastScanMs = 0;
+  static uint8_t stableCount = 0;
+
+  if (millis() - lastScanMs < 10) return;
+  lastScanMs = millis();
+
+  char raw = scanRawKey();
+  if (raw == lastRawKey && raw != 0) {
+    stableCount++;
+    if (stableCount == 3 && confirmedKey == 0) { // 30ms de debounce estável
+      confirmedKey = raw;
+      processKeyPress(confirmedKey);
+    }
+  } else if (raw == 0) {
+    if (confirmedKey != 0) {
+      // Tecla solta (RELEASE) - Bip de confirmação sonora
+      if (confirmedKey != 'P' && confirmedKey != 'C') {
+        beepKey();
+      }
+      confirmedKey = 0;
+    }
+    stableCount = 0;
+    lastRawKey = 0;
+  } else {
+    lastRawKey = raw;
+    stableCount = 1;
+  }
+
+  // Auto-Clear de Inatividade: limpa buffer após 3.5 segundos sem teclas
+  if (inputPinBuffer.length() > 0 && (millis() - lastKeyPressTime > 3500)) {
+    Serial.printf("[TECLADO] Inatividade > 3.5s. Buffer '%s' limpo automaticamente.\n", inputPinBuffer.c_str());
+    inputPinBuffer = "";
   }
 }
 
@@ -569,16 +701,16 @@ void setup() {
 
   gpio_hold_dis((gpio_num_t)PIN_LED_GREEN);
   gpio_hold_dis((gpio_num_t)PIN_LED_RED);
-  gpio_hold_dis((gpio_num_t)rowPins[0]);
-  gpio_hold_dis((gpio_num_t)rowPins[1]);
-  gpio_hold_dis((gpio_num_t)rowPins[2]);
+  gpio_hold_dis((gpio_num_t)ROW_PINS[0]);
+  gpio_hold_dis((gpio_num_t)ROW_PINS[1]);
+  gpio_hold_dis((gpio_num_t)ROW_PINS[2]);
   gpio_deep_sleep_hold_dis();
 
   Serial.begin(115200);
   delay(100);
 
   Serial.println("\n\n==========================================");
-  Serial.println("  COFRE INTELIGENTE ESP32-C3 - VERSÃO 4.0");
+  Serial.println("  COFRE INTELIGENTE ESP32-C3 - VERSÃO 4.1");
   Serial.println("==========================================");
 
   pinMode(PIN_SOLENOID, OUTPUT);
@@ -590,8 +722,12 @@ void setup() {
   pinMode(PIN_LED_RED, OUTPUT);
   digitalWrite(PIN_LED_RED, HIGH);
 
-  // Configura debounce do teclado para 40ms (rejeita ruídos RF do Wi-Fi)
-  keypad.setDebounceTime(40);
+  for (int r = 0; r < ROWS; r++) {
+    pinMode(ROW_PINS[r], INPUT_PULLUP);
+  }
+  for (int c = 0; c < COLS; c++) {
+    pinMode(COL_PINS[c], INPUT_PULLUP);
+  }
 
   deviceMac = WiFi.macAddress();
   emergencyRescuePin = calculateRescuePin(deviceMac);
@@ -600,6 +736,7 @@ void setup() {
   prefs.begin("cofre", false);
   solenoidPulseMs = prefs.getUShort("pulse", 800);
   portalTimeoutS  = prefs.getUShort("timeout", 180);
+  buzzerMode      = prefs.getUChar("bz_mode", 0);
   userCount       = prefs.getInt("u_cnt", 0);
 
   if (userCount == 0) {
@@ -631,23 +768,42 @@ void setup() {
     Serial.printf("[USUARIO %d] %s | PIN: %s | Admin: %d\n", i, users[i].name.c_str(), users[i].pin.c_str(), users[i].isAdmin);
   }
 
+  // Pisca LEDs Verde e Vermelho de Boas-Vindas
   for (int i = 0; i < 3; i++) {
     digitalWrite(PIN_LED_GREEN, LOW);
     digitalWrite(PIN_LED_RED, HIGH);
-    delay(100);
+    delay(80);
     digitalWrite(PIN_LED_GREEN, HIGH);
     digitalWrite(PIN_LED_RED, LOW);
-    delay(100);
+    delay(80);
   }
   digitalWrite(PIN_LED_GREEN, HIGH);
   digitalWrite(PIN_LED_RED, HIGH);
 
-  soundBuzzer(2000, 100);
-  delay(80);
-  soundBuzzer(2500, 150);
+  // DIAGNÓSTICO SONORO DO BUZZER (Executa os 3 modos no boot para validação imediata)
+  Serial.println("[BUZZER] Executando diagnóstico sonoro dos 3 modos...");
+  // Teste 1: Pulso DC LOW de 100ms (Ativo PNP)
+  digitalWrite(PIN_LED_GREEN, LOW);
+  soundBuzzer(1, 100);
+  digitalWrite(PIN_LED_GREEN, HIGH);
+  delay(200);
+
+  // Teste 2: Pulso DC HIGH de 100ms (Ativo NPN)
+  digitalWrite(PIN_LED_RED, LOW);
+  soundBuzzer(2, 100);
+  digitalWrite(PIN_LED_RED, HIGH);
+  delay(200);
+
+  // Teste 3: Tom AC PWM 2.7 kHz de 150ms (Passivo)
+  digitalWrite(PIN_LED_GREEN, LOW);
+  digitalWrite(PIN_LED_RED, LOW);
+  soundBuzzer(2700, 150);
+  digitalWrite(PIN_LED_GREEN, HIGH);
+  digitalWrite(PIN_LED_RED, HIGH);
 
   startWiFiPortal();
   lastActivityTime = millis();
+  lastKeyPressTime = millis();
 }
 
 // ============================================================================
@@ -671,29 +827,15 @@ void loop() {
     return;
   }
 
-  // Varredura de Teclas com Separação de Estados PRESSED e RELEASED
-  // Anti-Crosstalk: Bip executado no RELEASE (contatos mecânicos abertos)
-  if (keypad.getKeys()) {
-    for (int i = 0; i < LIST_MAX; i++) {
-      if (keypad.key[i].stateChanged) {
-        char k = keypad.key[i].kchar;
-        if (keypad.key[i].kstate == PRESSED) {
-          processKeyPress(k);
-        } else if (keypad.key[i].kstate == RELEASED) {
-          if (k != 'P' && k != 'C') {
-            beepKey(); // Bip apenas ao soltar a tecla numérica
-          }
-        }
-      }
-    }
-  }
+  // Varredura Nativa do Teclado com Acomodação RF e Debounce
+  updateKeypad();
 
-  // Heartbeat do LED Verde
+  // Heartbeat discreto do LED Verde (indica sistema rodando)
   static unsigned long lastHeartbeat = 0;
-  if (!solenoidActive && (millis() - lastHeartbeat > 1500)) {
+  if (!solenoidActive && (millis() - lastHeartbeat > 2000)) {
     lastHeartbeat = millis();
     digitalWrite(PIN_LED_GREEN, LOW);
-    delay(20);
+    delay(15);
     digitalWrite(PIN_LED_GREEN, HIGH);
   }
 }
