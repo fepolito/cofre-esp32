@@ -5,10 +5,12 @@
  * @mcu ESP32-C3FH4 (Pro Mini / Super Mini)
  * @features Varredor Matricial Nativo 3x4 com Imunidade RF (25µs settling delay),
  *           Debounce Triplo de 30ms, Auto-Clear de Inatividade (3.5s),
+ *           Timeout de Inatividade com Entrada Automática em Deep Sleep,
+ *           Proteção de Inicialização em Bateria (BOD Disable, Rampa 350ms, Watchdog),
+ *           Modo Osciloscópio Contínuo de 60s (Web e Teclado 888P/777P),
  *           Histórico Auditado com Exibição de Dígitos Brutos no Canal,
  *           Correção de Underflow Monotônico nos Logs ("Sessão anterior"),
  *           Buzzer Multi-Modo (Ativo PNP DC LOW, Ativo NPN DC HIGH, Passivo AC PWM),
- *           Sequência de Diagnóstico Sonoro no Boot e Teste via Web,
  *           Captive Portal Otimizado (+5 dBm RF, 80 MHz, GZIP).
  */
 
@@ -17,6 +19,9 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <Preferences.h>
+#include <esp_task_wdt.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 #include "web_page.h"
 
 // ============================================================================
@@ -29,7 +34,7 @@ const uint8_t PIN_LED_RED    = 10;  // LED Vermelho (Active-LOW)
 const uint8_t ROWS = 3;
 const uint8_t COLS = 4;
 
-const uint8_t ROW_PINS[ROWS] = {4, 5, 6}; // Linha 1 (Q3/Buzzer), Linha 2, Linha 3
+const uint8_t ROW_PINS[ROWS] = {4, 5, 6};    // Linha 1 (Q3/Buzzer), Linha 2, Linha 3
 const uint8_t COL_PINS[COLS] = {0, 1, 2, 3}; // Coluna 1, 2, 3, 4
 
 const char KEY_MAP[ROWS][COLS] = {
@@ -154,11 +159,19 @@ unsigned long solenoidOffTime = 0;
 bool solenoidActive = false;
 bool wifiActive = true;
 
+// Modo Osciloscópio (Sinal Contínuo de 60 segundos)
+enum ScopeMode { SCOPE_OFF, SCOPE_LOW, SCOPE_HIGH, SCOPE_TONE };
+ScopeMode scopeMode = SCOPE_OFF;
+unsigned long scopeEndTime = 0;
+
+void stopScopeTest();
+
 // ============================================================================
 // CONTROLE DO BUZZER MULTI-MODO E LEDS
 // ============================================================================
 void soundBuzzer(uint16_t freq, uint16_t durationMs) {
   if (durationMs == 0) return;
+  if (scopeMode != SCOPE_OFF) return; // Se teste de osciloscópio ativo, não interrompe
 
   pinMode(ROW_PINS[0], OUTPUT);
 
@@ -168,15 +181,12 @@ void soundBuzzer(uint16_t freq, uint16_t durationMs) {
   else if (freq > 10) mode = 2; // Força modo AC PWM Tone
 
   if (mode == 0) {
-    // Modo DC LOW: Ativa PNP Q3 (conduz com pino em nível baixo)
     digitalWrite(ROW_PINS[0], LOW);
     delay(durationMs);
   } else if (mode == 1) {
-    // Modo DC HIGH: Ativa NPN (conduz com pino em nível alto)
     digitalWrite(ROW_PINS[0], HIGH);
     delay(durationMs);
   } else {
-    // Modo AC PWM Tone: Buzzer passivo em frequência configurada
     uint16_t f = (freq > 10) ? freq : 2700;
     unsigned long halfPeriodUs = 500000UL / f;
     unsigned long cycles = ((unsigned long)f * durationMs) / 1000UL;
@@ -189,7 +199,6 @@ void soundBuzzer(uint16_t freq, uint16_t durationMs) {
   }
 
   // CRUCIAL: Retorna Linha 1 para INPUT_PULLUP ao terminar!
-  // Isso corta o buzzer e desobstrui o pino para ler as teclas '0', '1', '2', '3'!
   pinMode(ROW_PINS[0], INPUT_PULLUP);
 }
 
@@ -229,6 +238,39 @@ void beepError() {
 }
 
 // ============================================================================
+// MODO OSCILOSCÓPIO (SINAL CONTÍNUO DE 60 SEGUNDOS)
+// ============================================================================
+void startScopeTest(ScopeMode mode) {
+  scopeMode = mode;
+  scopeEndTime = millis() + 60000UL; // 60 segundos
+  lastActivityTime = millis();
+
+  pinMode(ROW_PINS[0], OUTPUT);
+  digitalWrite(PIN_LED_RED, LOW); // LED Vermelho aceso indicando sinal contínuo ativo
+
+  if (scopeMode == SCOPE_LOW) {
+    digitalWrite(ROW_PINS[0], LOW);
+    Serial.println("[OSCILOSCOPIO] Sinal DC LOW ativo no GPIO 4 (Base de Q3) por 60s.");
+  } else if (scopeMode == SCOPE_HIGH) {
+    digitalWrite(ROW_PINS[0], HIGH);
+    Serial.println("[OSCILOSCOPIO] Sinal DC HIGH ativo no GPIO 4 (Base de Q3) por 60s.");
+  } else if (scopeMode == SCOPE_TONE) {
+    tone(ROW_PINS[0], 2700);
+    Serial.println("[OSCILOSCOPIO] Tom PWM 2.7 kHz ativo no GPIO 4 por 60s.");
+  }
+}
+
+void stopScopeTest() {
+  if (scopeMode == SCOPE_TONE) {
+    noTone(ROW_PINS[0]);
+  }
+  pinMode(ROW_PINS[0], INPUT_PULLUP);
+  digitalWrite(PIN_LED_RED, HIGH); // Apaga LED Vermelho
+  scopeMode = SCOPE_OFF;
+  Serial.println("[OSCILOSCOPIO] Teste finalizado. GPIO 4 restaurado para INPUT_PULLUP.");
+}
+
+// ============================================================================
 // ACIONAMENTO DO SOLENOIDE
 // ============================================================================
 void triggerSolenoid(String authorizedUser, String method, bool isRescue = false) {
@@ -256,6 +298,9 @@ void updateSolenoid() {
 // ============================================================================
 void enterDeepSleep() {
   Serial.println("[ENERGIA] Desligando Wi-Fi e entrando em repouso...");
+  stopScopeTest();
+  esp_task_wdt_delete(NULL); // Remove watchdog antes do sono
+
   digitalWrite(PIN_SOLENOID, LOW);
   digitalWrite(PIN_LED_GREEN, HIGH);
   digitalWrite(PIN_LED_RED, HIGH);
@@ -504,7 +549,19 @@ void handleApiTestBuzzer() {
   String mode = server.arg("mode");
   mode.trim(); mode.toLowerCase();
 
-  if (mode == "low") {
+  if (mode == "scope_low") {
+    startScopeTest(SCOPE_LOW);
+    server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Modo Osciloscópio: Sinal DC LOW contínuo por 60s ativado!\"}");
+  } else if (mode == "scope_high") {
+    startScopeTest(SCOPE_HIGH);
+    server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Modo Osciloscópio: Sinal DC HIGH contínuo por 60s ativado!\"}");
+  } else if (mode == "scope_tone") {
+    startScopeTest(SCOPE_TONE);
+    server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Modo Osciloscópio: Onda Quadrada 2.7kHz contínua por 60s ativada!\"}");
+  } else if (mode == "stop") {
+    stopScopeTest();
+    server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Teste interrompido. GPIO 4 liberado!\"}");
+  } else if (mode == "low") {
     soundBuzzer(1, 100);
     server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Pulso DC LOW (100ms) emitido no Buzzer!\"}");
   } else if (mode == "high") {
@@ -556,11 +613,32 @@ void processKeyPress(char key) {
   lastActivityTime = millis();
   lastKeyPressTime = millis();
 
+  // Se teste de osciloscópio estiver rodando e qualquer tecla for pressionada, interrompe
+  if (scopeMode != SCOPE_OFF && key == 'C') {
+    stopScopeTest();
+    inputPinBuffer = "";
+    return;
+  }
+
   if (key == 'P') {
     Serial.printf("[TECLADO] Tecla P pressionada. Buffer: '%s'\n", inputPinBuffer.c_str());
 
     String rawBuffer = inputPinBuffer;
     String channelStr = "Teclado [" + (rawBuffer.length() > 0 ? rawBuffer : "vazio") + "]";
+
+    // Comando do Osciloscópio via Teclado: "888P" (LOW) ou "777P" (Tom)
+    if (rawBuffer == "888" || rawBuffer.endsWith("888")) {
+      startScopeTest(SCOPE_LOW);
+      addLog("Fernando", channelStr, "Osciloscópio 60s (GPIO 4 LOW)", true);
+      inputPinBuffer = "";
+      return;
+    }
+    if (rawBuffer == "777" || rawBuffer.endsWith("777")) {
+      startScopeTest(SCOPE_TONE);
+      addLog("Fernando", channelStr, "Osciloscópio 60s (Tom 2.7kHz)", true);
+      inputPinBuffer = "";
+      return;
+    }
 
     // Comando para ligar Wi-Fi: "000" ou termina com "000" ou apenas zeros (>= 3)
     bool isWebCode = (rawBuffer == "000" || rawBuffer.endsWith("000") || rawBuffer == "C000");
@@ -616,6 +694,9 @@ void processKeyPress(char key) {
     inputPinBuffer = "";
   }
   else if (key == 'C') {
+    if (scopeMode != SCOPE_OFF) {
+      stopScopeTest();
+    }
     inputPinBuffer = "";
     digitalWrite(PIN_LED_RED, LOW);
     soundBuzzer(0, 60);
@@ -623,7 +704,6 @@ void processKeyPress(char key) {
     Serial.println("[TECLADO] Buffer limpo manualmente (C).");
   }
   else {
-    // Permite buffer de até 16 dígitos para não truncar senhas de 8 dígitos caso haja ruído anterior
     if (inputPinBuffer.length() < 16) {
       inputPinBuffer += key;
       Serial.printf("[TECLADO] Digito '%c' capturado. Buffer: '%s'\n", key, inputPinBuffer.c_str());
@@ -673,7 +753,6 @@ void updateKeypad() {
     }
   } else if (raw == 0) {
     if (confirmedKey != 0) {
-      // Tecla solta (RELEASE) - Bip de confirmação sonora
       if (confirmedKey != 'P' && confirmedKey != 'C') {
         beepKey();
       }
@@ -697,6 +776,13 @@ void updateKeypad() {
 // SETUP
 // ============================================================================
 void setup() {
+  // 1. Desabilita o Brownout Detector no início para evitar loops de reset
+  // causados pela rampa de tensão do capacitor de 2200µF na bateria de 9V
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
+  // 2. Pausa para estabilização de tensão da fonte/bateria (2200µF carregando)
+  delay(350);
+
   setCpuFrequencyMhz(80);
 
   gpio_hold_dis((gpio_num_t)PIN_LED_GREEN);
@@ -707,11 +793,15 @@ void setup() {
   gpio_deep_sleep_hold_dis();
 
   Serial.begin(115200);
-  delay(100);
+  delay(50);
 
   Serial.println("\n\n==========================================");
-  Serial.println("  COFRE INTELIGENTE ESP32-C3 - VERSÃO 4.1");
+  Serial.println("  COFRE INTELIGENTE ESP32-C3 - VERSÃO 4.2");
   Serial.println("==========================================");
+
+  // Inicializa o Hardware Task Watchdog (6 segundos de tolerância)
+  esp_task_wdt_init(6, true);
+  esp_task_wdt_add(NULL);
 
   pinMode(PIN_SOLENOID, OUTPUT);
   digitalWrite(PIN_SOLENOID, LOW);
@@ -780,24 +870,21 @@ void setup() {
   digitalWrite(PIN_LED_GREEN, HIGH);
   digitalWrite(PIN_LED_RED, HIGH);
 
-  // DIAGNÓSTICO SONORO DO BUZZER (Executa os 3 modos no boot para validação imediata)
+  // Diagnóstico Sonoro dos 3 modos no Boot
   Serial.println("[BUZZER] Executando diagnóstico sonoro dos 3 modos...");
-  // Teste 1: Pulso DC LOW de 100ms (Ativo PNP)
   digitalWrite(PIN_LED_GREEN, LOW);
-  soundBuzzer(1, 100);
+  soundBuzzer(1, 100); // Teste 1: DC LOW (Ativo PNP)
   digitalWrite(PIN_LED_GREEN, HIGH);
   delay(200);
 
-  // Teste 2: Pulso DC HIGH de 100ms (Ativo NPN)
   digitalWrite(PIN_LED_RED, LOW);
-  soundBuzzer(2, 100);
+  soundBuzzer(2, 100); // Teste 2: DC HIGH (Ativo NPN)
   digitalWrite(PIN_LED_RED, HIGH);
   delay(200);
 
-  // Teste 3: Tom AC PWM 2.7 kHz de 150ms (Passivo)
   digitalWrite(PIN_LED_GREEN, LOW);
   digitalWrite(PIN_LED_RED, LOW);
-  soundBuzzer(2700, 150);
+  soundBuzzer(2700, 150); // Teste 3: Tom AC PWM 2.7 kHz (Passivo)
   digitalWrite(PIN_LED_GREEN, HIGH);
   digitalWrite(PIN_LED_RED, HIGH);
 
@@ -810,11 +897,24 @@ void setup() {
 // LOOP PRINCIPAL
 // ============================================================================
 void loop() {
+  esp_task_wdt_reset(); // Alimenta o Hardware Watchdog Timer
   updateSolenoid();
 
   if (wifiActive) {
     dnsServer.processNextRequest();
     server.handleClient();
+
+    // Verificação de Timeout do Captive Portal para Economia de Bateria
+    if (portalTimeoutS > 0 && (millis() - lastActivityTime > (unsigned long)portalTimeoutS * 1000UL)) {
+      Serial.printf("[ENERGIA] Inatividade de %d segundos atingida. Entrando em Deep Sleep...\n", portalTimeoutS);
+      addLog("Sistema", "Auto", "Timeout Inatividade (" + String(portalTimeoutS) + "s)", true);
+      enterDeepSleep();
+    }
+  }
+
+  // Atualização do Modo Osciloscópio (encerra automaticamente após 60s se ativo)
+  if (scopeMode != SCOPE_OFF && millis() >= scopeEndTime) {
+    stopScopeTest();
   }
 
   if (appState == MODE_BLOCKED) {
@@ -832,7 +932,7 @@ void loop() {
 
   // Heartbeat discreto do LED Verde (indica sistema rodando)
   static unsigned long lastHeartbeat = 0;
-  if (!solenoidActive && (millis() - lastHeartbeat > 2000)) {
+  if (!solenoidActive && scopeMode == SCOPE_OFF && (millis() - lastHeartbeat > 2000)) {
     lastHeartbeat = millis();
     digitalWrite(PIN_LED_GREEN, LOW);
     delay(15);

@@ -240,26 +240,46 @@
           <input type="number" id="pulseTimeInput" class="form-input" value="800" min="300" max="2000" step="100">
         </div>
         <div class="form-group">
-          <label>Timeout do Captive Portal (segundos)</label>
+          <label>Timeout do Captive Portal (segundos de inatividade)</label>
           <input type="number" id="sleepTimeoutInput" class="form-input" value="180" min="30" max="600" step="10">
+          <span style="font-size: 0.72rem; color: var(--text-muted); margin-top: 2px;">
+            O cofre desliga o Wi-Fi e entra em repouso após este tempo sem uso para economizar a bateria.
+          </span>
         </div>
 
-        <!-- Seção do Buzzer -->
+        <!-- Seção do Buzzer & Modo Osciloscópio -->
         <div class="form-group" style="margin-top: 14px;">
-          <label>Modo de Acionamento do Buzzer</label>
+          <label>Modo Padrão do Buzzer</label>
           <select id="buzzerModeSelect" class="form-input">
             <option value="0">Ativo PNP (Pulso DC LOW)</option>
             <option value="1">Ativo NPN (Pulso DC HIGH)</option>
             <option value="2">Passivo (Tom AC PWM 2.7 kHz)</option>
           </select>
           <span style="font-size: 0.72rem; color: var(--text-muted); margin-top: 2px;">
-            Selecione o modo compatível com o seu cofre e teste nos botões abaixo:
+            Selecione o modo compatível e teste nos botões abaixo:
           </span>
         </div>
-        <div style="display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap;">
+        <div style="display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap;">
           <button type="button" class="btn-secondary" style="flex: 1; min-width: 90px; font-size: 0.75rem;" onclick="testBuzzer('low')">🔊 Teste LOW</button>
           <button type="button" class="btn-secondary" style="flex: 1; min-width: 90px; font-size: 0.75rem;" onclick="testBuzzer('high')">🔊 Teste HIGH</button>
           <button type="button" class="btn-secondary" style="flex: 1; min-width: 90px; font-size: 0.75rem;" onclick="testBuzzer('tone')">🔊 Teste Tom</button>
+        </div>
+
+        <!-- Modo Osciloscópio 60s -->
+        <div style="background: #0b1120; border: 1px solid #38bdf8; border-radius: var(--radius-md); padding: 12px; margin-bottom: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <h4 style="font-size: 0.85rem; color: #38bdf8;">🔬 Modo Osciloscópio (Sinal Contínuo 60s)</h4>
+            <span id="scopeTimerDisplay" style="font-family: monospace; font-size: 0.8rem; color: #f59e0b; display: none;">⏳ 60s restantes</span>
+          </div>
+          <p style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 8px;">
+            Gera sinal ininterrupto por 1 minuto no GPIO 4 (Base de Q3) para posicionar o osciloscópio:
+          </p>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <button type="button" class="btn-secondary btn-primary-action" style="flex: 1; min-width: 80px; font-size: 0.72rem;" onclick="startScope('scope_low')">🔬 60s LOW (PNP)</button>
+            <button type="button" class="btn-secondary btn-primary-action" style="flex: 1; min-width: 80px; font-size: 0.72rem;" onclick="startScope('scope_high')">🔬 60s HIGH (NPN)</button>
+            <button type="button" class="btn-secondary btn-primary-action" style="flex: 1; min-width: 80px; font-size: 0.72rem;" onclick="startScope('scope_tone')">🔬 60s Tom 2.7k</button>
+            <button type="button" class="btn-secondary btn-danger" style="flex: 1; min-width: 80px; font-size: 0.72rem;" onclick="stopScope()">⏹️ Parar</button>
+          </div>
         </div>
 
         <button class="btn-secondary" onclick="handleSaveConfig()" style="margin-bottom: 14px;">Salvar Parâmetros</button>
@@ -311,6 +331,9 @@
       logs: [],
       modalPin: ''
     };
+
+    let scopeInterval = null;
+    let scopeSecondsLeft = 0;
 
     function showToast(msg, isError = false) {
       const toast = document.getElementById('toast');
@@ -506,6 +529,45 @@
         showToast(data.message || 'Comando enviado ao Buzzer!');
       } catch (e) {
         showToast('Erro ao testar buzzer', true);
+      }
+    }
+
+    async function startScope(mode) {
+      try {
+        const res = await fetch(`/api/test_buzzer?mode=${mode}`, { method: 'POST' });
+        const data = await res.json();
+        showToast(data.message || 'Modo Osciloscópio iniciado por 60s!');
+        
+        scopeSecondsLeft = 60;
+        const disp = document.getElementById('scopeTimerDisplay');
+        disp.style.display = 'inline';
+        disp.innerText = `⏳ ${scopeSecondsLeft}s restantes`;
+
+        if (scopeInterval) clearInterval(scopeInterval);
+        scopeInterval = setInterval(() => {
+          scopeSecondsLeft--;
+          if (scopeSecondsLeft <= 0) {
+            clearInterval(scopeInterval);
+            disp.style.display = 'none';
+            showToast('Teste de 60s finalizado.');
+          } else {
+            disp.innerText = `⏳ ${scopeSecondsLeft}s restantes`;
+          }
+        }, 1000);
+      } catch(e) {
+        showToast('Erro ao iniciar modo osciloscópio', true);
+      }
+    }
+
+    async function stopScope() {
+      if (scopeInterval) clearInterval(scopeInterval);
+      document.getElementById('scopeTimerDisplay').style.display = 'none';
+      try {
+        const res = await fetch('/api/test_buzzer?mode=stop', { method: 'POST' });
+        const data = await res.json();
+        showToast(data.message || 'Teste interrompido!');
+      } catch(e) {
+        showToast('Erro ao interromper teste', true);
       }
     }
 

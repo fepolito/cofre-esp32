@@ -9,7 +9,7 @@
 | **Autor** | Fernando Polito |
 | **Microcontrolador** | ESP32-C3FH4 (Placa ESP32-C3 Super Mini / Pro Mini) |
 | **Hardware Original** | Placa Cofre SC421630P (Motorola DIP-16) |
-| **Status** | **Versão 2.2 - Varredor Matricial Nativo Imune a RF, Logs com Buffer Visível, Correção de Underflow e Buzzer Multi-Modo** |
+| **Status** | **Versão 2.3 - Modo Osciloscópio (60s), Timeout Deep Sleep em Loop, Proteção de Rampa em Bateria (BOD/WDT) e RDC Atualizado** |
 | **Data** | Outubro de 2026 |
 
 ---
@@ -132,6 +132,29 @@ A placa de circuito impresso original do cofre foi inteiramente mapeada e transc
 
 ---
 
+### 4.5. Modo Osciloscópio (Sinal Contínuo de 60 Segundos)
+* **Objetivo:** Permitir ao operador posicionar pontas de prova do osciloscópio ou multímetro na Base do transistor `Q3` (GPIO 4) com tempo hábil e sinal ininterrupto.
+* **Comandos Disponíveis:**
+  * **Via Web (Aba Ajustes):** Botões para `🔬 60s LOW (PNP)`, `🔬 60s HIGH (NPN)`, `🔬 60s Tom 2.7kHz` e `⏹️ Parar`, com cronômetro regressivo em tempo real.
+  * **Via Teclado Físico:** Digitar `888P` (aciona 60s LOW com LED vermelho aceso) ou `777P` (aciona 60s Tom 2.7kHz).
+  * **Interrupção:** Qualquer tecla pressionada ou o botão `C` interrompe imediatamente o sinal e restaura o GPIO 4 para `INPUT_PULLUP`.
+
+### 4.6. Gestão de Rampa da Bateria e Timeout Automático de Repouso
+* **Causa do Travamento na Conexão da Bateria:**
+  * A conexão mecânica da bateria de 9V (clip snap) apresenta repiques elétricos (*contact bounce*) nos primeiros 10 a 50 ms.
+  * O capacitor eletrolítico de reservatório de **2200 µF** exige corrente de carga através do regulador `S-812C` (limite de ~50-75 mA), gerando uma rampa lenta de subida da tensão ($dV/dt$) de aproximadamente **160 ms**.
+  * Durante essa rampa, o microcontrolador começava a inicializar quando a tensão ainda estava em patamar sub-ótimo (~2,0V), provocando disparo do *Brownout Detector* (BOD) ou travamento do clock PLL.
+* **Solução de Software (v2.3):**
+  1. Desabilitação precoce do detector de brownout no bootloader (`WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0)`).
+  2. Pausa de acomodação de **350 ms** em `setup()` antes da inicialização de clocks e periféricos.
+  3. Inicialização do **Hardware Task Watchdog Timer (6 segundos)**, garantindo auto-recuperação do ESP32 caso ocorra qualquer stall elétrico transitório sem necessidade de botão físico.
+* **Recomendação de Hardware:**
+  * Soldar um capacitor de **1 µF a 10 µF** entre o pino `EN` (CHIP_PU) do ESP32 e o terra (`GND`). Isso atrasa a liberação do pino de habilitação até que o capacitor de 2200 µF atinja a tensão nominal, garantindo Power-On-Reset 100% limpo em qualquer conexão brusca da bateria.
+* **Timeout do Captive Portal:**
+  * Implementada a checagem no `loop()`: se decorridos `portalTimeoutS` segundos (padrão: 180s) sem nenhuma requisição web ou toque no teclado, o ESP32 desliga o rádio Wi-Fi e entra em Deep Sleep automaticamente.
+
+---
+
 ## 5. Diretrizes de Autonomia Energética (Deep Sleep e o LED de Power)
 
 ### 5.1. Análise do Consumo do LED de Power On-Board
@@ -154,3 +177,4 @@ A placa de circuito impresso original do cofre foi inteiramente mapeada e transc
 | **2.0** | 30/09/2026 | Engenharia reversa no KiCad 10, pinagem validada em bancada, firmware REST e expurgo da senha `123456`. |
 | **2.1** | 01/10/2026 | Validação da bateria com capacitor de 2200µF, correção de anti-crosstalk no teclado, logs persistentes na Flash e auditoria de consumo do LED. |
 | **2.2** | 01/10/2026 | Varredor nativo imune a RF (25µs settling delay), buffer visível nos logs, correção do underflow de millis, buzzer multi-modo (PNP/NPN/AC) e botões de teste no portal web. |
+| **2.3** | 01/10/2026 | Modo osciloscópio contínuo (60s via web e teclado 888P/777P), timeout automático para deep sleep em loop, proteção contra rampa lenta de 2200µF na bateria (delay 350ms, BOD off, WDT 6s). |
